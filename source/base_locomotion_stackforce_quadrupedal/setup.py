@@ -8,7 +8,7 @@
 import os
 
 import toml
-from setuptools import setup
+from setuptools import find_packages, setup
 
 # Obtain the extension data from the extension.toml file
 EXTENSION_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -17,14 +17,14 @@ EXTENSION_TOML_DATA = toml.load(os.path.join(EXTENSION_PATH, "config", "extensio
 
 # Minimum dependencies required prior to installation
 INSTALL_REQUIRES = [
-    # NOTE: Add dependencies
+    "omegaconf>=2.3",
     "psutil",
 ]
 
 # Installation operation
 setup(
     name="base_locomotion_stackforce_quadrupedal",
-    packages=["base_locomotion_stackforce_quadrupedal"],
+    packages=find_packages(),
     author=EXTENSION_TOML_DATA["package"]["author"],
     maintainer=EXTENSION_TOML_DATA["package"]["maintainer"],
     url=EXTENSION_TOML_DATA["package"]["repository"],
@@ -32,6 +32,18 @@ setup(
     description=EXTENSION_TOML_DATA["package"]["description"],
     keywords=EXTENSION_TOML_DATA["package"]["keywords"],
     install_requires=INSTALL_REQUIRES,
+    package_data={
+        "base_locomotion_stackforce_quadrupedal": [
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/README.md",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/config/*.json",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/meshes/*.stl",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/urdf/*.urdf",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/usd/*.usd",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/usd/*.usda",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/usd/**/*.usd",
+            "assets/robots/stackforce_quadrupedal_wheeled_robot/usd/**/*.usda",
+        ]
+    },
     license="Apache-2.0",
     include_package_data=True,
     python_requires=">=3.12",

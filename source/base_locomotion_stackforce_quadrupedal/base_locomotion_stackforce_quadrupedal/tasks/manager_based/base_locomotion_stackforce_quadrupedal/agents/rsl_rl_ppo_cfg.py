@@ -39,3 +39,29 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class ComplexPPORunnerCfg(PPORunnerCfg):
+    num_steps_per_env = 24
+    max_iterations = 10000
+    save_interval = 250
+    experiment_name = "base_locomotion_complex"
+    logger = "wandb"
+    wandb_project = "stackforce-quadrupedal-locomotion"
+    clip_actions = 1.0
+    obs_groups = {
+        "actor": ["policy"],
+        "critic": ["policy", "privileged"],
+    }
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[128, 128],
+        activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[128, 128],
+        activation="elu",
+        obs_normalization=False,
+    )

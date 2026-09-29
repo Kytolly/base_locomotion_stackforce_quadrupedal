@@ -38,9 +38,15 @@ logger = logging.getLogger(__name__)
 
 RSL_RL_VERSION = "5.0.1"
 RL_ROOT = Path(__file__).resolve().parents[1]
-CLI_ARGS = import_local_module("isaaclab_rsl_rl_cli_args", RL_ROOT / "rsl_rl" / "cli_args.py")
+CLI_ARGS = import_local_module(
+    "isaaclab_rsl_rl_cli_args", RL_ROOT / "rsl_rl" / "cli_args.py"
+)
 
 import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric import (  # noqa: E501
+    TrainingMetricsWrapper,
+)
+
 with contextlib.suppress(ImportError):
     import isaaclab_tasks_experimental  # noqa: F401
 
@@ -50,9 +56,23 @@ def _check_rsl_rl_version() -> str:
     installed_version = metadata.version("rsl-rl-lib")
     if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
         if platform.system() == "Windows":
-            cmd = [r".\isaaclab.bat", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
+            cmd = [
+                r".\isaaclab.bat",
+                "-p",
+                "-m",
+                "pip",
+                "install",
+                f"rsl-rl-lib=={RSL_RL_VERSION}",
+            ]
         else:
-            cmd = ["./isaaclab.sh", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
+            cmd = [
+                "./isaaclab.sh",
+                "-p",
+                "-m",
+                "pip",
+                "install",
+                f"rsl-rl-lib=={RSL_RL_VERSION}",
+            ]
         print(
             f"Please install the correct version of RSL-RL.\nExisting version is: '{installed_version}'"
             f" and required version is: '{RSL_RL_VERSION}'.\nTo install the correct version, run:"
@@ -87,7 +107,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
     remaining_args_env_registration = None
     if args_cli.external_callback:
-        external_callback_function = string_to_callable(args_cli.external_callback, separator=".")
+        external_callback_function = string_to_callable(
+            args_cli.external_callback, separator="."
+        )
         remaining_args_env_registration = external_callback_function()
 
     # physics=/renderer=/presets= tokens pass through the remainder for hydra to parse later
@@ -104,7 +126,11 @@ def run(argv: list[str]) -> None:
 
     from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
 
-    from isaaclab_tasks.utils import get_checkpoint_path, launch_simulation, resolve_task_config
+    from isaaclab_tasks.utils import (
+        get_checkpoint_path,
+        launch_simulation,
+        resolve_task_config,
+    )
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -119,7 +145,9 @@ def run(argv: list[str]) -> None:
         agent_cfg = CLI_ARGS.update_rsl_rl_cfg(agent_cfg, args_cli)
         apply_env_overrides(args_cli, env_cfg)
         agent_cfg.max_iterations = (
-            args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
+            args_cli.max_iterations
+            if args_cli.max_iterations is not None
+            else agent_cfg.max_iterations
         )
 
         agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
@@ -135,7 +163,9 @@ def run(argv: list[str]) -> None:
             env_cfg.seed = seed
             agent_cfg.seed = seed
 
-        log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+        log_root_path = os.path.abspath(
+            os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+        )
         print(f"[INFO] Logging experiment in directory: {log_root_path}")
         log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         print(f"Exact experiment name requested from command line: {log_dir}")
@@ -154,17 +184,28 @@ def run(argv: list[str]) -> None:
         )
 
         if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+            resume_path = get_checkpoint_path(
+                log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint
+            )
 
         env = wrap_record_video(env, log_dir, args_cli)
 
         start_time = time.time()
+        if (
+            args_cli.task.split(":")[-1]
+            == "Base-Locomotion-Stackforce-Quadrupedal-Complex-v0"
+        ):
+            env = TrainingMetricsWrapper(env)
         env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
         if agent_cfg.class_name == "OnPolicyRunner":
-            runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+            runner = OnPolicyRunner(
+                env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device
+            )
         elif agent_cfg.class_name == "DistillationRunner":
-            runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+            runner = DistillationRunner(
+                env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device
+            )
         else:
             raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
 
@@ -176,7 +217,10 @@ def run(argv: list[str]) -> None:
         dump_train_configs(log_dir, env_cfg, agent_cfg)
 
         try:
-            runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+            runner.learn(
+                num_learning_iterations=agent_cfg.max_iterations,
+                init_at_random_ep_len=True,
+            )
             print(f"Training time: {round(time.time() - start_time, 2)} seconds")
             env.close()
         except KeyboardInterrupt:

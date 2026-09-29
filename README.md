@@ -12,6 +12,12 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
 
 **Keywords:** extension, template, isaaclab
 
+## Project status
+
+The project registers `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0` plus fixed Plateau and Washboard benchmark tasks, backed by the packaged `sf_quad` closed-loop robot. Training is launched from OmegaConf YAML with W&B logging and defaults to `launcher.viz: kit` for Isaac Sim GUI inspection. This establishes a runnable training/benchmark baseline, not a trained locomotion policy. The implementation status, gap matrix, experiment directories, W&B contract, and staged acceptance protocol are maintained in [`docs/INDEX.md`](docs/INDEX.md).
+
+The locomotion interface and validation contracts are defined in the repository-level [`doc/locomotion/`](../doc/locomotion/base_locomotion_spec.md). The reference task `Wheel-Leg-Complex-Train-v0` is evidence for implementation shape only; its checkpoints and runs are not evidence for this project.
+
 ## Installation
 
 - Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
@@ -40,8 +46,8 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
     - Running a task:
 
         ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
+        # defaults to Isaac Sim Kit GUI and W&B online; override with OmegaConf dotlist values as needed
+        python scripts/rsl_rl/train.py --config configs/train/base_locomotion_complex.yaml
         ```
 
     - Running a task with dummy agents:

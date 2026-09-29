@@ -3,8 +3,38 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""This sub-module contains the functions that are specific to the environment."""
+"""MDP terms shared by the template and StackForce locomotion tasks."""
 
-from isaaclab.utils.module import lazy_export
+from isaaclab.envs.mdp import (
+    JointEffortActionCfg,
+    is_alive,
+    is_terminated,
+    joint_pos_out_of_manual_limit,
+    joint_pos_rel,
+    joint_vel_l1,
+    joint_vel_rel,
+    reset_joints_by_offset,
+    time_out,
+)
 
-lazy_export()
+from . import action, events, observation, policy, reward, terminations
+from .rewards import joint_pos_target_l2
+
+__all__ = [
+    "JointEffortActionCfg",
+    "action",
+    "events",
+    "is_alive",
+    "is_terminated",
+    "joint_pos_out_of_manual_limit",
+    "joint_pos_rel",
+    "joint_pos_target_l2",
+    "joint_vel_l1",
+    "joint_vel_rel",
+    "observation",
+    "policy",
+    "reset_joints_by_offset",
+    "reward",
+    "terminations",
+    "time_out",
+]

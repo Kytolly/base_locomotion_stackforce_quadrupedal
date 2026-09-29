@@ -48,6 +48,8 @@ from prettytable import PrettyTable
 
 import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401
 
+TASK_PREFIXES = ("Template-", "Base-Locomotion-")
+
 # PLACEHOLDER: Extension template (do not remove this comment)
 with contextlib.suppress(ImportError):
     import base_locomotion_stackforce_quadrupedal.tasks_experimental  # noqa: F401
@@ -87,7 +89,7 @@ def main():
     task_specs = [
         spec
         for spec in gym.registry.values()
-        if "Template-" in spec.id and (args_cli.keyword is None or args_cli.keyword in spec.id)
+        if spec.id.startswith(TASK_PREFIXES) and (args_cli.keyword is None or args_cli.keyword in spec.id)
     ]
 
     if args_cli.show_presets:

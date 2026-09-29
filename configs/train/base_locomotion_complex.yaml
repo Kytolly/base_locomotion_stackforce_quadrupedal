@@ -1,0 +1,69 @@
+schema_version: 1
+task: Base-Locomotion-Stackforce-Quadrupedal-Complex-v0
+
+launcher:
+  device: cuda:0
+  viz: kit
+  enable_cameras: false
+  max_visible_envs: 16
+  use_fabric: true
+
+env:
+  num_envs: 64
+  seed: 42
+  sim_dt: 0.005
+  decimation: 4
+  render_interval: 4
+  episode_length_s: 30.0
+
+agent:
+  num_steps_per_env: 24
+  max_iterations: 10000
+  save_interval: 250
+  experiment_name: base_locomotion_complex
+  run_name: complex_seed42
+  clip_actions: 1.0
+  resume: false
+  load_run: .*
+  load_checkpoint: model_.*.pt
+  actor:
+    hidden_dims: [128, 128]
+    activation: elu
+    obs_normalization: false
+    distribution_cfg:
+      init_std: 0.5
+  critic:
+    hidden_dims: [128, 128]
+    activation: elu
+    obs_normalization: false
+  algorithm:
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    learning_rate: 0.001
+    schedule: adaptive
+    gamma: 0.99
+    lam: 0.95
+    entropy_coef: 0.005
+    desired_kl: 0.01
+    max_grad_norm: 1.0
+    value_loss_coef: 1.0
+    use_clipped_value_loss: true
+    clip_param: 0.2
+
+wandb:
+  enabled: true
+  project: stackforce-quadrupedal-locomotion
+  entity: null
+  mode: online
+  group: complex-terrain
+  run_name: ${agent.run_name}
+  tags: [stackforce, quadrupedal, wheel-leg, ppo, eight-terrain]
+
+video:
+  enabled: false
+  interval: 2000
+  length: 200
+
+runtime:
+  log_root: logs/rsl_rl
+  init_at_random_episode_length: true

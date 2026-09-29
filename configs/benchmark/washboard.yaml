@@ -1,0 +1,22 @@
+schema_version: 1
+task: Base-Locomotion-Stackforce-Quadrupedal-Washboard-v0
+
+launcher:
+  device: cuda:0
+  viz: kit
+  enable_cameras: false
+  max_visible_envs: 1
+  use_fabric: true
+
+benchmark:
+  kind: washboard
+  seed: 8201
+  randomized: false
+  max_steps: 1750
+  success_fraction: 0.9
+
+policy:
+  zero_policy: true
+  checkpoint: null
+
+output: output/benchmark/${benchmark.kind}/seed_${benchmark.seed}.json

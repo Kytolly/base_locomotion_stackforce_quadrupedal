@@ -1,0 +1,129 @@
+{
+  "static_status": "PASS",
+  "simulation_status": "NOT_RUN",
+  "rl_ready": false,
+  "negative_control": true,
+  "test": "CPU suspended-base gravity; no ground or commanded actuation",
+  "rigid_bodies": 21,
+  "tree_joints": {
+    "FL_thigh_joint": {
+      "anchor_error_m": 1.8703505471614053e-09,
+      "axis_error_rad": 7.146345858741881e-08
+    },
+    "FL_calf_joint": {
+      "anchor_error_m": 1.1361005701692508e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "FL_foot_joint": {
+      "anchor_error_m": 3.3644982097041177e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "FR_thigh_joint": {
+      "anchor_error_m": 1.8703505471614053e-09,
+      "axis_error_rad": 7.146345858741881e-08
+    },
+    "FR_calf_joint": {
+      "anchor_error_m": 1.1361005738060337e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "FR_foot_joint": {
+      "anchor_error_m": 3.364498211390649e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "RL_thigh_joint": {
+      "anchor_error_m": 1.8703505471614053e-09,
+      "axis_error_rad": 7.146345858741881e-08
+    },
+    "RL_calf_joint": {
+      "anchor_error_m": 1.1361005738060337e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "RL_foot_joint": {
+      "anchor_error_m": 3.364498211390649e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "RR_thigh_joint": {
+      "anchor_error_m": 1.8703505471614053e-09,
+      "axis_error_rad": 7.146345858741881e-08
+    },
+    "RR_calf_joint": {
+      "anchor_error_m": 1.1361005701692508e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "RR_foot_joint": {
+      "anchor_error_m": 3.3644982097041177e-09,
+      "axis_error_rad": 1.4901161193847656e-08
+    },
+    "FR_M2_joint": {
+      "anchor_error_m": 3.024590074863498e-09,
+      "axis_error_rad": 0.0
+    },
+    "FR_P2_joint": {
+      "anchor_error_m": 3.358793998719812e-10,
+      "axis_error_rad": 0.0
+    },
+    "FL_M2_joint": {
+      "anchor_error_m": 3.024590074863498e-09,
+      "axis_error_rad": 0.0
+    },
+    "FL_P2_joint": {
+      "anchor_error_m": 3.358793998719812e-10,
+      "axis_error_rad": 0.0
+    },
+    "RL_M2_joint": {
+      "anchor_error_m": 3.024590074863498e-09,
+      "axis_error_rad": 0.0
+    },
+    "RL_P2_joint": {
+      "anchor_error_m": 3.358793998719812e-10,
+      "axis_error_rad": 0.0
+    },
+    "RR_M2_joint": {
+      "anchor_error_m": 3.024590074863498e-09,
+      "axis_error_rad": 0.0
+    },
+    "RR_P2_joint": {
+      "anchor_error_m": 3.358793998719812e-10,
+      "axis_error_rad": 0.0
+    }
+  },
+  "legs": {
+    "FR": {
+      "imported_radial_m": 4.10377999890118e-14,
+      "axial_offset_m": -0.04494984724564945,
+      "initial_anchor_error_m": 2.632969193165271e-09,
+      "initial_axis_error_rad": 2.9802322387695312e-08,
+      "max_anchor_error_m": 0.12908488917625272,
+      "max_axis_error_rad": 5.232260073341571e-06
+    },
+    "FL": {
+      "imported_radial_m": 4.10377999890118e-14,
+      "axial_offset_m": -0.04494984724564945,
+      "initial_anchor_error_m": 2.598795224619026e-09,
+      "initial_axis_error_rad": 3.332000937312528e-08,
+      "max_anchor_error_m": 0.12921607573408037,
+      "max_axis_error_rad": 1.0945285816605625e-05
+    },
+    "RL": {
+      "imported_radial_m": 4.10377999890118e-14,
+      "axial_offset_m": -0.04494984724564945,
+      "initial_anchor_error_m": 2.632969193165271e-09,
+      "initial_axis_error_rad": 3.332000937312528e-08,
+      "max_anchor_error_m": 0.12873287358168364,
+      "max_axis_error_rad": 1.1276654949073711e-05
+    },
+    "RR": {
+      "imported_radial_m": 4.10377999890118e-14,
+      "axial_offset_m": -0.04494984724564945,
+      "initial_anchor_error_m": 2.598795224619026e-09,
+      "initial_axis_error_rad": 6.143906154658886e-08,
+      "max_anchor_error_m": 0.12896812104873825,
+      "max_axis_error_rad": 5.2127661152565784e-06
+    }
+  },
+  "body_motion_m": 0.06783567960794053,
+  "steps": 480,
+  "dt_s": 0.004166666666666667,
+  "simulation_time_s": 2.008333438076079,
+  "error": "Traceback (most recent call last):\n  File \"/home/kytolly/Project/IsaacProject/sf_quad/source/sf_quad/sf_quad/assets/robots/stackforce_quadrupedal_wheeled_robot/scripts/simulation_validation.py\", line 135, in <module>\n    main(report)\n  File \"/home/kytolly/Project/IsaacProject/sf_quad/source/sf_quad/sf_quad/assets/robots/stackforce_quadrupedal_wheeled_robot/scripts/simulation_validation.py\", line 127, in main\n    raise RuntimeError(\"Closure drift exceeds smoke-test limits (1 mm / 0.01 rad)\")\nRuntimeError: Closure drift exceeds smoke-test limits (1 mm / 0.01 rad)\n"
+}

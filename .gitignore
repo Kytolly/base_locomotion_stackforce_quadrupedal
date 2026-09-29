@@ -14,6 +14,13 @@
 **/*.usdc
 **/*.usdz
 
+# The packaged StackForce closed-loop asset is an intentional exception.
+!source/base_locomotion_stackforce_quadrupedal/base_locomotion_stackforce_quadrupedal/assets/
+!source/base_locomotion_stackforce_quadrupedal/base_locomotion_stackforce_quadrupedal/assets/robots/
+!source/base_locomotion_stackforce_quadrupedal/base_locomotion_stackforce_quadrupedal/assets/robots/stackforce_quadrupedal_wheeled_robot/
+!source/base_locomotion_stackforce_quadrupedal/base_locomotion_stackforce_quadrupedal/assets/robots/stackforce_quadrupedal_wheeled_robot/usd/
+!source/base_locomotion_stackforce_quadrupedal/base_locomotion_stackforce_quadrupedal/assets/robots/stackforce_quadrupedal_wheeled_robot/usd/**
+
 # Python
 .DS_Store
 **/*.egg-info/
