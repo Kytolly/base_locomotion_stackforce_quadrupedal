@@ -43,8 +43,9 @@ benchmark/washboard_track/  washboard 固定赛道参数与 USD/PhysX 生成
 2. [Policy、Action 与 Reward 合同](POLICY_ACTION_REWARD.md)
 3. [实验、日志、模型和 W&B 运行约定](EXPERIMENT_PROTOCOL.md)
 4. [Plateau 与 Washboard Benchmark](BENCHMARKS.md)
-5. [仓库根目录 locomotion 规范](../../doc/locomotion/base_locomotion_spec.md)
-6. [参考任务执行闭环](../../demo_wheel_leg_switching/docs/RL_CLOSED_LOOP.md)
+5. [Locomotion 验收标准](ACCEPTANCE_CRITERIA.md)
+6. [仓库根目录 locomotion 规范](../../doc/locomotion/base_locomotion_spec.md)
+7. [参考任务执行闭环](../../demo_wheel_leg_switching/docs/RL_CLOSED_LOOP.md)
 
 ## 实施顺序
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import traceback
 
 from isaaclab.app import AppLauncher
 
@@ -60,6 +61,7 @@ COMPLEX_TASK = "Base-Locomotion-Stackforce-Quadrupedal-Complex-v0"
 
 
 def main() -> None:
+    print("[VERIFY] stage=parse_cfg", flush=True)
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs
     )
@@ -67,11 +69,29 @@ def main() -> None:
         env_cfg.episode_length_s = (
             args_cli.steps * float(env_cfg.sim.dt) * int(env_cfg.decimation)
         )
+    print("[VERIFY] stage=create_env", flush=True)
     env = gym.make(args_cli.task, cfg=env_cfg)
+    print("[VERIFY] stage=env_created", flush=True)
     if args_cli.task == COMPLEX_TASK:
         env = TrainingMetricsWrapper(env)
     try:
+        print("[VERIFY] stage=reset", flush=True)
         observations, _ = env.reset()
+        print("[VERIFY] stage=rollout", flush=True)
+        if args_cli.task == COMPLEX_TASK:
+            expected_sensors = {
+                "contact_fr": "FR_Foot_Link",
+                "contact_fl": "FL_Foot_Link",
+                "contact_rl": "RL_Foot_Link",
+                "contact_rr": "RR_Foot_Link",
+                "base_contact": "base_link",
+            }
+            for sensor_name, expected_body in expected_sensors.items():
+                actual = env.unwrapped.scene[sensor_name].body_names
+                if actual != [expected_body]:
+                    raise RuntimeError(
+                        f"{sensor_name} must bind only {expected_body}, received {actual}."
+                    )
         actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
         for _ in range(args_cli.steps):
             with torch.inference_mode():
@@ -125,7 +145,8 @@ def main() -> None:
             f"observation_shapes={{{', '.join(f'{name}: {tuple(value.shape)}' for name, value in observations.items())}}} "
             f"finite={observation_finite} "
             f"reward_mean={float(rewards.mean()):.6f} "
-            f"terminated={int(terminated.sum())} truncated={int(truncated.sum())}"
+            f"terminated={int(terminated.sum())} truncated={int(truncated.sum())}",
+            flush=True,
         )
         if args_cli.task == COMPLEX_TASK:
             reward_terms = dict(
@@ -171,5 +192,8 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except BaseException:
+        traceback.print_exc()
+        raise
     finally:
         simulation_app.close()

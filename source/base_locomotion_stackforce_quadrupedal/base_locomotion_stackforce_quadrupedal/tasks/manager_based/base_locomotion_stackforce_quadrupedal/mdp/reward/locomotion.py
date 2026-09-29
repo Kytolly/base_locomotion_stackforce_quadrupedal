@@ -13,6 +13,7 @@ from ..policy.commands import (
     LOCOMOTION_COMMAND_NAME,
     YAW_RATE,
 )
+from ..support import local_support_height
 
 
 def _command(env, command_name: str) -> torch.Tensor:
@@ -67,7 +68,8 @@ def track_body_height_exp(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    height = asset.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
+    support_height, _ = local_support_height(env, asset_cfg=asset_cfg)
+    height = asset.data.root_pos_w[:, 2] - support_height
     error = _command(env, command_name)[:, BODY_HEIGHT] - height
     return _exp_tracking(error, std)
 

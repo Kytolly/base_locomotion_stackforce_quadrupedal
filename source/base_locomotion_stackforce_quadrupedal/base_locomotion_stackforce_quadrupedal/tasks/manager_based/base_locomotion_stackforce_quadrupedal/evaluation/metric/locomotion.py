@@ -16,6 +16,7 @@ from ...mdp.policy.commands import (
     LOCOMOTION_COMMAND_NAME,
     YAW_RATE,
 )
+from ...mdp.support import local_support_height, wheel_contact_state
 
 
 def _finite_or_zero(value: torch.Tensor) -> torch.Tensor:
@@ -92,6 +93,9 @@ class LocomotionEpisodeMetrics:
             "actual_lateral_sum",
             "actual_yaw_sum",
             "actual_height_sum",
+            "support_invalid_count",
+            "supported_wheel_count",
+            "base_collision_count",
         )
         self._buffers = {
             name: torch.zeros(self.num_envs, device=self.device) for name in names
@@ -150,9 +154,11 @@ class LocomotionEpisodeMetrics:
         joint_vel = _finite_or_zero(joint_vel)
         joint_torque = _finite_or_zero(joint_torque)
 
-        height = _finite_or_zero(
-            robot.data.root_pos_w[:, 2] - self.env.scene.env_origins[:, 2]
-        )
+        support_height, support_valid = local_support_height(self.env)
+        height = _finite_or_zero(robot.data.root_pos_w[:, 2] - support_height)
+        contact = wheel_contact_state(self.env)
+        base_force = self.env.scene["base_contact"].data.net_forces_w_history
+        base_collision = torch.linalg.vector_norm(base_force, dim=-1).amax(dim=-1).amax(dim=-1) > 8.0
         forward_error = command[:, FORWARD] - root_lin_vel_b[:, 1]
         lateral_error = command[:, LATERAL] - root_lin_vel_b[:, 0]
         yaw_error = command[:, YAW_RATE] - root_ang_vel_b[:, 2]
@@ -207,6 +213,9 @@ class LocomotionEpisodeMetrics:
             torch.sum(power[:, leg_count:], dim=1) * self.dt
         )
         self._buffers["finite_steps"] += finite.float()
+        self._buffers["support_invalid_count"] += (~support_valid).float()
+        self._buffers["supported_wheel_count"] += contact.sum(dim=1).float()
+        self._buffers["base_collision_count"] += base_collision.float()
 
         for index, name in enumerate(("forward", "lateral", "yaw", "height")):
             self._buffers[f"raw_{name}_sum"] += raw_command[:, index]
@@ -252,6 +261,9 @@ class LocomotionEpisodeMetrics:
             "safety/unsafe_termination": terminated[env_ids].float(),
             "safety/timeout": truncated[env_ids].float(),
             "safety/base_height_failure": base_height_failure[env_ids].float(),
+            "safety/base_collision_rate": self._buffers["base_collision_count"][env_ids] / steps,
+            "support/invalid_rate": self._buffers["support_invalid_count"][env_ids] / steps,
+            "support/wheel_contact_fraction": self._buffers["supported_wheel_count"][env_ids] / (4.0 * steps),
             "safety/base_tilt_mean_rad": self._buffers["tilt_sum"][env_ids] / steps,
             "safety/base_tilt_rms_rad": torch.sqrt(
                 self._buffers["tilt_sq"][env_ids] / steps
@@ -292,11 +304,14 @@ class LocomotionEpisodeMetrics:
             "terrain/level": self._episode_terrain_level[env_ids].float(),
         }
         terrain_cfg = self.env.cfg.scene.terrain.terrain_generator
-        num_rows = max(int(terrain_cfg.num_rows), 1)
-        lower, upper = terrain_cfg.difficulty_range
-        metrics["terrain/difficulty_midpoint"] = lower + (upper - lower) * (
-            (self._episode_terrain_level[env_ids].float() + 0.5) / num_rows
-        )
+        if terrain_cfg is None:
+            metrics["terrain/difficulty_midpoint"] = torch.zeros_like(steps)
+        else:
+            num_rows = max(int(terrain_cfg.num_rows), 1)
+            lower, upper = terrain_cfg.difficulty_range
+            metrics["terrain/difficulty_midpoint"] = lower + (upper - lower) * (
+                (self._episode_terrain_level[env_ids].float() + 0.5) / num_rows
+            )
         for name in ("forward", "lateral", "yaw", "height"):
             metrics[f"command/raw_{name}_mean"] = (
                 self._buffers[f"raw_{name}_sum"][env_ids] / steps

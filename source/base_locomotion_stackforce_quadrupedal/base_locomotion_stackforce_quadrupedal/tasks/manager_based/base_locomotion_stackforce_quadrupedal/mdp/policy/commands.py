@@ -19,6 +19,27 @@ YAW_RATE = 2
 BODY_HEIGHT = 3
 
 
+def compose_velocity_command(
+    mode: int, forward_mps: float, lateral_mps: float, yaw_rate_radps: float
+) -> tuple[float, float, float]:
+    """Compose one of the seven locomotion intent families."""
+    if mode == 0:
+        return 0.0, 0.0, 0.0
+    if mode == 1:
+        return abs(forward_mps), 0.0, 0.0
+    if mode == 2:
+        return -abs(forward_mps), 0.0, 0.0
+    if mode == 3:
+        return 0.0, lateral_mps, 0.0
+    if mode == 4:
+        return 0.0, 0.0, yaw_rate_radps
+    if mode == 5:
+        return abs(forward_mps), 0.0, yaw_rate_radps
+    if mode == 6:
+        return -abs(forward_mps), 0.0, yaw_rate_radps
+    raise ValueError(f"Unknown locomotion command mode: {mode}.")
+
+
 class LocomotionCommand(CommandTerm):
     """Sample and shape body-frame velocity and body-height commands."""
 
@@ -80,20 +101,31 @@ class LocomotionCommand(CommandTerm):
         return extras
 
     def _resample_command(self, env_ids: Sequence[int]) -> None:
-        sample = torch.empty(len(env_ids), device=self.device)
+        count = len(env_ids)
+
+        def sample(bounds: tuple[float, float]) -> torch.Tensor:
+            return torch.empty(count, device=self.device).uniform_(*bounds)
+
         ranges = self.cfg.ranges
-        self._target_command[env_ids, FORWARD] = sample.uniform_(
-            *ranges.forward_velocity_mps
-        )
-        self._target_command[env_ids, LATERAL] = sample.uniform_(
-            *ranges.lateral_velocity_mps
-        )
-        self._target_command[env_ids, YAW_RATE] = sample.uniform_(
-            *ranges.yaw_rate_radps
-        )
-        self._target_command[env_ids, BODY_HEIGHT] = sample.uniform_(
-            *ranges.body_height_m
-        )
+        mode = torch.randint(0, 7, (count,), device=self.device)
+        command = torch.zeros((count, LOCOMOTION_COMMAND_DIM), device=self.device)
+        minimum_speed = max(0.0, ranges.forward_velocity_mps[0])
+        maximum_speed = ranges.forward_velocity_mps[1]
+        speed = sample((minimum_speed, maximum_speed))
+        lateral = sample(ranges.lateral_velocity_mps)
+        yaw = sample(ranges.yaw_rate_radps)
+        moving_speed = sample((minimum_speed, maximum_speed))
+        moving_yaw = sample(ranges.yaw_rate_radps)
+        command[mode == 1, FORWARD] = speed[mode == 1]
+        command[mode == 2, FORWARD] = -speed[mode == 2]
+        command[mode == 3, LATERAL] = lateral[mode == 3]
+        command[mode == 4, YAW_RATE] = yaw[mode == 4]
+        command[mode == 5, FORWARD] = moving_speed[mode == 5]
+        command[mode == 5, YAW_RATE] = moving_yaw[mode == 5]
+        command[mode == 6, FORWARD] = -moving_speed[mode == 6]
+        command[mode == 6, YAW_RATE] = moving_yaw[mode == 6]
+        self._target_command[env_ids] = command
+        self._target_command[env_ids, BODY_HEIGHT] = sample(ranges.body_height_m)
 
     def _update_command(self) -> None:
         max_delta = self._max_rate * float(self._env.step_dt)
@@ -137,7 +169,7 @@ class LocomotionCommandCfg(CommandTermCfg):
 
     @configclass
     class Ranges:
-        forward_velocity_mps: tuple[float, float] = (0.25, 0.45)
+        forward_velocity_mps: tuple[float, float] = (0.15, 0.45)
         lateral_velocity_mps: tuple[float, float] = (-0.10, 0.10)
         yaw_rate_radps: tuple[float, float] = (-0.25, 0.25)
         body_height_m: tuple[float, float] = (0.105, 0.105)

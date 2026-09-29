@@ -19,6 +19,29 @@ def reset_root_to_default(
     asset.write_root_velocity_to_sim(root_state[:, 7:], env_ids=env_ids)
 
 
+def activate_contact_reports(env, env_ids=None) -> None:
+    """Enable contact reports on the nested base and wheel rigid bodies."""
+    from isaaclab.sim import get_current_stage
+    from pxr import PhysxSchema, UsdPhysics
+
+    body_paths = (
+        "Geometry/base_link",
+        *(
+            f"Geometry/base_link/{leg}_Outer_Thigh_Link/{leg}_Outer_Calf_Link/{leg}_Foot_Link"
+            for leg in ("FR", "FL", "RL", "RR")
+        ),
+    )
+    stage = get_current_stage()
+    for env_index in range(env.num_envs):
+        for body_path in body_paths:
+            prim_path = f"/World/envs/env_{env_index}/Robot/{body_path}"
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid() or not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                raise RuntimeError(f"Contact body is not a valid rigid body: '{prim_path}'.")
+            PhysxSchema.PhysxRigidBodyAPI.Apply(prim).CreateSleepThresholdAttr().Set(0.0)
+            PhysxSchema.PhysxContactReportAPI.Apply(prim).CreateThresholdAttr().Set(0.0)
+
+
 def set_fixed_benchmark_command(
     env,
     env_ids: torch.Tensor,

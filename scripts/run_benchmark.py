@@ -71,7 +71,7 @@ def main() -> None:
     from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
 
     import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401
-    from base_locomotion_stackforce_quadrupedal.benchmark import track_length
+    from base_locomotion_stackforce_quadrupedal.benchmark import TrackTraversal, track_length
     from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.robots import (
         LEG_JOINTS,
         WHEEL_JOINTS,
@@ -119,9 +119,30 @@ def main() -> None:
         vec_env.reset()
         env = base_env.unwrapped
         robot = env.scene["robot"]
+        parameters = env.benchmark_track_parameters
+        traversal = TrackTraversal(parameters)
+        traversal.update(
+            float(robot.data.root_pos_w[0, 0].item()),
+            float(robot.data.root_pos_w[0, 1].item()),
+        )
         leg_ids, _ = robot.find_joints(list(LEG_JOINTS), preserve_order=True)
         wheel_ids, _ = robot.find_joints(list(WHEEL_JOINTS), preserve_order=True)
         rewards: list[float] = []
+        expected_command = torch.tensor(
+            [
+                float(env_cfg.events.fixed_command.params["forward_velocity"]),
+                0.0,
+                0.0,
+                float(env_cfg.events.fixed_command.params["body_height"]),
+            ],
+            device=env.device,
+        )
+        initial_command = env.command_manager.get_command("locomotion")[0].clone()
+        command_min = initial_command.clone()
+        command_max = initial_command.clone()
+        fixed_command_pass = bool(
+            torch.allclose(initial_command, expected_command, atol=1.0e-6, rtol=0.0)
+        )
         progress = 0.0
         leg_energy = 0.0
         wheel_energy = 0.0
@@ -146,6 +167,10 @@ def main() -> None:
             truncated = bool(env.reset_time_outs[0].item())
             if not bool(dones[0].item()):
                 progress += float((y_after - y_before)[0].item())
+                traversal.update(
+                    float(robot.data.root_pos_w[0, 0].item()),
+                    float(robot.data.root_pos_w[0, 1].item()),
+                )
 
             joint_velocity = robot.data.joint_vel
             joint_torque = robot.data.applied_torque
@@ -162,6 +187,12 @@ def main() -> None:
                 * env.step_dt
             )
             command = env.command_manager.get_command("locomotion")[:, 0]
+            full_command = env.command_manager.get_command("locomotion")[0]
+            command_min = torch.minimum(command_min, full_command)
+            command_max = torch.maximum(command_max, full_command)
+            fixed_command_pass &= bool(
+                torch.allclose(full_command, expected_command, atol=1.0e-6, rtol=0.0)
+            )
             tracking_error_sq += float(
                 torch.square(command - robot.data.root_lin_vel_b[:, 1]).mean().item()
             )
@@ -183,7 +214,6 @@ def main() -> None:
                 truncated_seen = truncated
                 break
 
-        parameters = env.benchmark_track_parameters
         required_progress = float(config.benchmark.success_fraction) * track_length(
             parameters
         )
@@ -200,10 +230,20 @@ def main() -> None:
             "git_commit": _git_commit(),
             "ppo_updates": 0,
             "steps": steps,
-            "episode_complete": terminated_seen or truncated_seen,
+            "episode_complete": truncated_seen and not terminated_seen,
             "forward_progress_m": progress,
             "required_progress_m": required_progress,
-            "success": progress >= required_progress and not terminated_seen,
+            "success": (
+                traversal.complete
+                and truncated_seen
+                and not terminated_seen
+                and all_finite
+                and fixed_command_pass
+            ),
+            "track_checkpoints_passed": traversal.gate_index,
+            "track_checkpoint_count": len(traversal.gates),
+            "track_corridor_violation": traversal.corridor_violation,
+            "track_trajectory_discontinuity": traversal.trajectory_discontinuity,
             "fall_termination": terminated_seen,
             "timeout_termination": truncated_seen,
             "mean_step_reward": sum(rewards) / max(steps, 1),
@@ -212,6 +252,19 @@ def main() -> None:
             "leg_mechanical_energy_j": leg_energy,
             "wheel_mechanical_energy_j": wheel_energy,
             "runtime_all_finite": all_finite,
+            "fixed_command_pass": fixed_command_pass,
+            "locomotion_command": {
+                "order": [
+                    "forward_velocity_mps",
+                    "lateral_velocity_mps",
+                    "yaw_rate_rps",
+                    "body_height_m",
+                ],
+                "expected": expected_command.tolist(),
+                "observed_initial": initial_command.tolist(),
+                "observed_min": command_min.tolist(),
+                "observed_max": command_max.tolist(),
+            },
             "track_length_m": track_length(parameters),
             "track_parameters": parameters,
         }

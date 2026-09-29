@@ -29,10 +29,14 @@ DEFAULT_VALIDATION_SCENARIOS = (
 
 CORE_FAMILY_METRICS = (
     "locomotion/forward_velocity_rmse_mps",
+    "locomotion/lateral_velocity_rmse_mps",
     "locomotion/yaw_rate_rmse_radps",
     "locomotion/body_height_rmse_m",
     "safety/unsafe_termination",
     "safety/timeout",
+    "safety/base_collision_rate",
+    "support/invalid_rate",
+    "support/wheel_contact_fraction",
     "actuation/action_saturation_rate",
     "actuation/leg_mechanical_energy_j",
     "actuation/wheel_mechanical_energy_j",
@@ -80,7 +84,11 @@ def _scenario_report(metrics: dict[str, torch.Tensor]) -> dict[str, Any]:
         if not values:
             continue
         aggregate[f"macro/{output_name}"] = sum(values) / len(values)
-        if output_name in ("safety/timeout_survival_rate", "runtime/all_finite"):
+        if output_name in (
+            "safety/timeout_survival_rate",
+            "runtime/all_finite",
+            "support/wheel_contact_fraction",
+        ):
             aggregate[f"worst/{output_name}"] = min(values)
         else:
             aggregate[f"worst/{output_name}"] = max(values)
@@ -120,6 +128,33 @@ def build_validation_report(
     all_finite = all(
         result["overall"]["runtime/all_finite"] == 1.0 for result in scenarios.values()
     )
+    thresholds = {
+        "forward_velocity_rmse_mps_max": 0.15,
+        "lateral_velocity_rmse_mps_max": 0.12,
+        "yaw_rate_rmse_radps_max": 0.10,
+        "body_height_rmse_m_max": 0.025,
+        "unsafe_termination_rate_max": 0.05,
+        "base_collision_rate_max": 0.01,
+        "support_invalid_rate_max": 0.01,
+        "wheel_contact_fraction_min": 0.50,
+        "action_saturation_rate_max": 0.05,
+        "base_tilt_max_p95_rad_max": 1.05,
+    }
+    performance_pass = complete_commands and complete_terrains and complete_episodes and all_finite
+    for result in scenarios.values():
+        overall = result["overall"]
+        performance_pass &= (
+            overall["locomotion/forward_velocity_rmse_mps"] <= thresholds["forward_velocity_rmse_mps_max"]
+            and overall["locomotion/lateral_velocity_rmse_mps"] <= thresholds["lateral_velocity_rmse_mps_max"]
+            and overall["locomotion/yaw_rate_rmse_radps"] <= thresholds["yaw_rate_rmse_radps_max"]
+            and overall["locomotion/body_height_rmse_m"] <= thresholds["body_height_rmse_m_max"]
+            and overall["safety/unsafe_termination"] <= thresholds["unsafe_termination_rate_max"]
+            and overall["safety/base_collision_rate"] <= thresholds["base_collision_rate_max"]
+            and overall["support/invalid_rate"] <= thresholds["support_invalid_rate_max"]
+            and overall["support/wheel_contact_fraction"] >= thresholds["wheel_contact_fraction_min"]
+            and overall["actuation/action_saturation_rate"] <= thresholds["action_saturation_rate_max"]
+            and overall["safety/base_tilt_max_p95_rad"] <= thresholds["base_tilt_max_p95_rad_max"]
+        )
     return {
         "schema_version": 1,
         "metadata": metadata,
@@ -135,9 +170,11 @@ def build_validation_report(
             "complete_terrain_coverage": complete_terrains,
             "complete_episodes": complete_episodes,
             "all_finite": all_finite,
+            "performance_pass": bool(performance_pass),
+            "thresholds": thresholds,
             "rule": (
-                "Compare tracking error, unsafe termination, macro/worst-family performance, "
-                "mechanical energy, and saturation; episode reward alone is not a selection criterion."
+                "Performance PASS requires all recorded command and terrain coverage, complete finite episodes, "
+                "and every fixed threshold; episode reward alone is not a selection criterion."
             ),
         },
     }

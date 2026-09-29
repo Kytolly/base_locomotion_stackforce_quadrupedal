@@ -33,6 +33,58 @@ def track_length(parameters: dict[str, Any]) -> float:
     )
 
 
+class TrackTraversal:
+    """Track-local traversal proof using ordered gates and lateral bounds."""
+
+    def __init__(
+        self, parameters: dict[str, Any], margin_m: float = 0.15, max_step_m: float = 0.5
+    ) -> None:
+        if max_step_m <= 0.0:
+            raise ValueError("max_step_m must be positive.")
+        self.parameters = parameters
+        self.track_length_m = track_length(parameters)
+        self.half_width_m = float(parameters["width_m"]) / 2.0 - margin_m
+        if self.half_width_m <= 0.0:
+            raise ValueError("Track width must exceed twice the corridor margin.")
+        approach = float(parameters["approach_m"])
+        ramp = float(parameters["ramp_length_m"])
+        if parameters["kind"] == "plateau":
+            plateau_end = approach + ramp + float(parameters["plateau_length_m"])
+            gates = (approach + ramp, plateau_end, plateau_end + ramp)
+        else:
+            bed_end = approach + ramp + (int(parameters["ridge_count"]) - 1) * float(
+                parameters["ridge_spacing_m"]
+            )
+            gates = (approach + ramp, bed_end + ramp)
+        self.gates = tuple(gates) + (self.track_length_m,)
+        self.gate_index = 0
+        self.corridor_violation = False
+        self.trajectory_discontinuity = False
+        self.max_step_m = max_step_m
+        self.max_y_m = float("-inf")
+        self._last_y_m: float | None = None
+
+    def update(self, x_m: float, y_m: float) -> None:
+        if self._last_y_m is None:
+            self.trajectory_discontinuity = y_m > self.gates[0]
+        elif abs(y_m - self._last_y_m) > self.max_step_m:
+            self.trajectory_discontinuity = True
+        self._last_y_m = y_m
+        self.max_y_m = max(self.max_y_m, y_m)
+        if -0.3 <= y_m <= self.track_length_m and abs(x_m) > self.half_width_m:
+            self.corridor_violation = True
+        while self.gate_index < len(self.gates) and y_m >= self.gates[self.gate_index]:
+            self.gate_index += 1
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.gate_index == len(self.gates)
+            and not self.corridor_violation
+            and not self.trajectory_discontinuity
+        )
+
+
 def spawn_benchmark_track(
     env,
     env_ids,

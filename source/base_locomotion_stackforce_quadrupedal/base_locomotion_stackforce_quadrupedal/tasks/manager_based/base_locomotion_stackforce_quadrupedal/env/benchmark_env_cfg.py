@@ -25,6 +25,9 @@ class BenchmarkSceneCfg(ComplexSceneCfg):
 
 @configclass
 class BenchmarkEventsCfg(EventCfg):
+    randomize_contact_material = None
+    randomize_base_mass = None
+    randomize_actuator_gains = None
     fixed_command = EventTerm(
         func=events.set_fixed_benchmark_command,
         mode="reset",
@@ -50,6 +53,10 @@ class PlateauBenchmarkEnvCfg(BaseLocomotionComplexEnvCfg):
         self.sim.dt = 1.0 / 200.0
         self.sim.render_interval = self.decimation
         self.scene.num_envs = 1
+        self.curriculum.terrain_levels = None
+        self.scene.support_scanner.update_period = self.decimation * self.sim.dt
+        for sensor_name in ("contact_fr", "contact_fl", "contact_rl", "contact_rr", "base_contact"):
+            getattr(self.scene, sensor_name).update_period = self.sim.dt
         self.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
         self.viewer.eye = (4.5, -3.0, 2.8)
         self.viewer.lookat = (0.0, 2.0, 0.25)
