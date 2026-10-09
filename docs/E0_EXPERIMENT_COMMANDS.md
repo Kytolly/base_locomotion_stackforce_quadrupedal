@@ -6,6 +6,7 @@ Each registered experiment has one directly executable training configuration:
 - auxiliary experiments: `configs/train/auxiliary/`
 - matrix: `configs/experiments/e0_experiments.yaml`
 - command generator: `scripts/e0_experiment_commands.py`
+- four-stage scheduler: `scripts/run_e0_training.sh`
 - shared contract: `configs/train/base_locomotion_e0_46d.yaml`
 
 Run commands from the repository root with the Isaac Lab Python environment.
@@ -51,20 +52,42 @@ Print the foundation command for one run:
   --experiment b2_bisec_full --seed 42 --stage foundation
 ```
 
-Omit `--experiment`, `--seed`, and `--stage` to print all 19 registered experiments, three seeds, and four terrain stages. Add `--include-sweep` to append the 32 regularizer candidates.
+Omit `--experiment`, `--seed`, and `--stage` to print all 20 registered experiments, three seeds, and four terrain stages. Add `--include-sweep` to append the 32 regularizer candidates.
 
 ## Run a staged training lineage
 
-The common 20,000-iteration budget is split into foundation 1,000, expansion 5,000, composition 7,000, and consolidation 7,000 iterations. Run foundation first. For each later stage, provide the exact previous run directory and checkpoint:
+The common 20,000-iteration budget is split into Foundation 1,000, Expansion
+5,000, Composition 7,000, and Consolidation 7,000 updates. Start one complete
+lineage with:
 
 ```bash
-/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/e0_experiment_commands.py \
-  --experiment b2_bisec_full --seed 42 --stage expansion \
-  --load-run 2026-10-09_20-00-00_b2_bisec_full_foundation_seed42 \
-  --load-checkpoint model_999.pt
+conda activate env_isaaclab
+bash scripts/run_e0_training.sh --experiment b2_bisec_full --seed 42
 ```
 
-The generator enables the controlled terrain-stage resume flag for non-foundation stages. That flag permits only terrain profile/proportion changes. A change to observations, actions, rewards, commands, curriculum terms, PPO, or network structure still fails the checkpoint contract.
+The scheduler takes stage profiles and update counts directly from the matrix.
+It requires the exact preceding checkpoint and verifies its Actor, Critic,
+Optimizer, and iteration fields before continuing. Expected endpoints are
+`model_999.pt`, `model_5999.pt`, `model_12999.pt`, and `model_19999.pt`.
+Commands and subprocess output are retained in
+`logs/e0_orchestration/<experiment>_seed<seed>.log`; successful stage paths are
+also recorded in the adjacent JSON manifest. A failed stage stops the lineage
+without deleting its run directory or checkpoint files.
+
+After Foundation has completed, resume the remaining stages with:
+
+```bash
+bash scripts/run_e0_training.sh \
+  --experiment b2_bisec_full --seed 42 --completed-stage foundation
+```
+
+`--start-stage expansion` has the same checkpoint-discovery behavior. The
+scheduler selects the newest valid exact run suffix for the given experiment,
+stage, and seed; it rejects missing, incorrectly numbered, or incomplete
+checkpoints. Non-Foundation stages enable the controlled terrain-stage resume
+flag. That flag permits only terrain profile/proportion changes. A change to
+observations, actions, rewards, commands, curriculum terms, PPO, or network
+structure still fails the checkpoint contract.
 
 ## Evaluation
 
