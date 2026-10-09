@@ -8,13 +8,63 @@ from typing import Any
 import torch
 from base_locomotion_stackforce_quadrupedal.benchmark.acceptance import MAXIMUMS, MINIMUMS, passes_thresholds
 
-from ...env.terrains import TRAINING_TERRAIN_FAMILIES
+from ...env.terrains import TRAINING_TERRAIN_FAMILIES, get_complex_terrain_cfg
 
 
 VALIDATION_FAMILIES_BY_PROFILE = {
-    profile: TRAINING_TERRAIN_FAMILIES
-    for profile in ("legacy_equal", "source_alignment", "union_consolidation")
+    "legacy_equal": tuple(
+        family
+        for family in TRAINING_TERRAIN_FAMILIES
+        if family not in {"hf_pyramid_slope_inv", "flat", "continuous_mixed"}
+    ),
+    "source_alignment": (
+        "random_rough",
+        "boxes",
+        "pyramid_stairs",
+        "pyramid_stairs_inv",
+        "hf_pyramid_slope",
+        "hf_pyramid_slope_inv",
+    ),
+    "union_consolidation": TRAINING_TERRAIN_FAMILIES,
 }
+VALIDATION_TERRAIN_COLUMNS = 15
+
+
+def validation_terrain_layout(
+    profile: str, seed: int
+) -> tuple[Any, tuple[int, ...]]:
+    """Build the real profile and map Isaac terrain columns to family IDs."""
+    if profile not in VALIDATION_FAMILIES_BY_PROFILE:
+        raise ValueError(
+            f"Unsupported validation terrain profile {profile!r}; expected one of "
+            f"{sorted(VALIDATION_FAMILIES_BY_PROFILE)}."
+        )
+    config = get_complex_terrain_cfg(
+        seed=seed, num_cols=VALIDATION_TERRAIN_COLUMNS, profile=profile
+    )
+    proportions = [float(cfg.proportion) for cfg in config.sub_terrains.values()]
+    total = sum(proportions)
+    cumulative: list[float] = []
+    running = 0.0
+    for proportion in proportions:
+        running += proportion / total
+        cumulative.append(running)
+    family_ids: list[int] = []
+    names = tuple(config.sub_terrains)
+    for column in range(config.num_cols):
+        sample = column / config.num_cols + 0.001
+        subterrain_index = next(
+            index for index, boundary in enumerate(cumulative) if sample < boundary
+        )
+        family_ids.append(TRAINING_TERRAIN_FAMILIES.index(names[subterrain_index]))
+    observed = {TRAINING_TERRAIN_FAMILIES[index] for index in family_ids}
+    expected = set(VALIDATION_FAMILIES_BY_PROFILE[profile])
+    if observed != expected:
+        raise RuntimeError(
+            f"Validation terrain layout for {profile!r} produced {sorted(observed)}, "
+            f"expected {sorted(expected)}."
+        )
+    return config, tuple(family_ids)
 
 
 @dataclass(frozen=True)
@@ -171,17 +221,20 @@ def build_validation_report(
         scenario.name for scenario in DEFAULT_VALIDATION_SCENARIOS
         if scenario.requires_continuous_route
     }
-    continuous_route_complete = complete_commands and all(
-        scenarios[name]["terrain_families"]["continuous_mixed"].get(
-            "terrain/continuous_route_complete", 0.0
-        ) == 1.0
-        and scenarios[name]["terrain_families"]["continuous_mixed"].get(
-            "terrain/continuous_route_ordered_checkpoints", 0.0
-        ) == 3.0
-        and scenarios[name]["terrain_families"]["continuous_mixed"].get(
-            "terrain/continuous_route_corridor_valid", 0.0
-        ) == 1.0
-        for name in route_scenarios
+    continuous_route_complete = "continuous_mixed" not in terrain_families or (
+        complete_commands
+        and all(
+            scenarios[name]["terrain_families"]["continuous_mixed"].get(
+                "terrain/continuous_route_complete", 0.0
+            ) == 1.0
+            and scenarios[name]["terrain_families"]["continuous_mixed"].get(
+                "terrain/continuous_route_ordered_checkpoints", 0.0
+            ) == 3.0
+            and scenarios[name]["terrain_families"]["continuous_mixed"].get(
+                "terrain/continuous_route_corridor_valid", 0.0
+            ) == 1.0
+            for name in route_scenarios
+        )
     )
     performance_pass = (
         complete_commands and complete_terrains and complete_episodes and all_finite
@@ -215,8 +268,8 @@ def build_validation_report(
             "thresholds": thresholds,
             "rule": (
                 "Performance PASS requires all recorded command and terrain coverage, complete finite episodes, "
-                "the ordered continuous-mixed route, and every fixed threshold; episode reward alone is not a "
-                "selection criterion."
+                "the ordered continuous-mixed route when that family is in the profile, and every fixed threshold; "
+                "episode reward alone is not a selection criterion."
             ),
         },
     }

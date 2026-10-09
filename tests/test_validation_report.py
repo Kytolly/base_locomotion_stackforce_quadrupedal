@@ -2,9 +2,13 @@
 
 import torch
 
-from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.validation import (
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.validation.suite import (
     DEFAULT_VALIDATION_SCENARIOS,
     build_validation_report,
+    validation_terrain_layout,
+)
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import (
+    TRAINING_TERRAIN_FAMILIES,
 )
 
 
@@ -64,7 +68,7 @@ def test_missing_terrain_family_blocks_checkpoint_comparison() -> None:
     assert report["scenarios"]["forward"]["terrain_coverage"]["missing"] == ["continuous_mixed"]
 
 
-def test_source_alignment_still_requires_the_formal_eleven_families() -> None:
+def test_source_alignment_requires_its_six_real_families() -> None:
     metrics = {
         scenario.name: _scenario_metrics() for scenario in DEFAULT_VALIDATION_SCENARIOS
     }
@@ -75,8 +79,26 @@ def test_source_alignment_still_requires_the_formal_eleven_families() -> None:
     report = build_validation_report(
         metrics, {"ppo_updates": 0, "terrain_profile": "source_alignment"}
     )
-    assert not report["selection_evidence"]["eligible_for_checkpoint_comparison"]
-    assert len(report["scenarios"]["forward"]["terrain_coverage"]["missing"]) == 5
+    assert report["selection_evidence"]["eligible_for_checkpoint_comparison"]
+    assert report["scenarios"]["forward"]["terrain_coverage"]["missing"] == []
+
+
+def test_validation_profiles_generate_distinct_truthful_layouts() -> None:
+    source_cfg, source_ids = validation_terrain_layout("source_alignment", 1001)
+    union_cfg, union_ids = validation_terrain_layout("union_consolidation", 1001)
+
+    assert source_cfg.num_cols == union_cfg.num_cols == 15
+    assert source_ids != union_ids
+    assert {TRAINING_TERRAIN_FAMILIES[index] for index in source_ids} == {
+        "random_rough", "boxes", "pyramid_stairs", "pyramid_stairs_inv",
+        "hf_pyramid_slope", "hf_pyramid_slope_inv",
+    }
+    assert {TRAINING_TERRAIN_FAMILIES[index] for index in union_ids} == set(
+        TRAINING_TERRAIN_FAMILIES
+    )
+    assert source_cfg.sub_terrains["flat"].proportion == 0.0
+    assert union_cfg.sub_terrains["flat"].proportion == 0.15
+    assert union_cfg.sub_terrains["continuous_mixed"].proportion == 0.30
 
 
 def test_incomplete_episode_blocks_checkpoint_comparison() -> None:

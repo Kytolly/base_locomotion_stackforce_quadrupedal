@@ -82,9 +82,10 @@ import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401,E402
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric import (  # noqa: E501,E402
     LocomotionEpisodeMetrics,
 )
-from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.validation import (  # noqa: E501,E402
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.validation.suite import (  # noqa: E501,E402
     DEFAULT_VALIDATION_SCENARIOS,
     build_validation_report,
+    validation_terrain_layout,
 )
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.action import (  # noqa: E501,E402
     POLICY_ACTION_DIM,
@@ -94,7 +95,6 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
 )
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import (  # noqa: E501,E402
     TRAINING_TERRAIN_FAMILIES,
-    get_complex_terrain_cfg,
 )
 
 
@@ -171,7 +171,9 @@ def _base_height_flags(env) -> torch.Tensor:
     return flags
 
 
-def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
+def _run_scenario(
+    env, vec_env, policy, scenario, terrain_family_by_column: torch.Tensor
+) -> dict[str, torch.Tensor]:
     torch.manual_seed(args_cli.seed)
     terrain = env.scene.terrain
     levels = torch.arange(env.num_envs, device=env.device) % terrain.max_terrain_level
@@ -179,8 +181,9 @@ def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
         levels.fill_(args_cli.terrain_level)
     terrain.terrain_levels[:] = levels
     terrain.terrain_types[:] = torch.arange(env.num_envs, device=env.device) % len(
-        TRAINING_TERRAIN_FAMILIES
+        terrain_family_by_column
     )
+    terrain.validation_family_by_column = terrain_family_by_column
     terrain.env_origins[:] = terrain.terrain_origins[levels, terrain.terrain_types]
     vec_env.reset()
     if policy is not None:
@@ -274,14 +277,9 @@ def main() -> None:
     env_cfg.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
     env_cfg.__post_init__()
     env_cfg.terrain_profile = args_cli.terrain_profile
-    validation_terrain = get_complex_terrain_cfg(
-        seed=args_cli.seed,
-        num_cols=len(TRAINING_TERRAIN_FAMILIES),
-        profile="union_consolidation",
+    validation_terrain, terrain_family_by_column = validation_terrain_layout(
+        args_cli.terrain_profile, args_cli.seed
     )
-    equal_proportion = 1.0 / len(TRAINING_TERRAIN_FAMILIES)
-    for subterrain in validation_terrain.sub_terrains.values():
-        subterrain.proportion = equal_proportion
     env_cfg.scene.terrain.terrain_generator = validation_terrain
     env_cfg.curriculum.terrain_levels = None
     env_cfg.events.reset_root.params["slope_approach_fraction"] = 0.0
@@ -321,7 +319,13 @@ def main() -> None:
     try:
         print(f"[VALIDATION] running {len(DEFAULT_VALIDATION_SCENARIOS)} scenarios", flush=True)
         scenario_metrics = {
-            scenario.name: _run_scenario(base_env.unwrapped, vec_env, policy, scenario)
+            scenario.name: _run_scenario(
+                base_env.unwrapped,
+                vec_env,
+                policy,
+                scenario,
+                torch.tensor(terrain_family_by_column, device=base_env.unwrapped.device),
+            )
             for scenario in DEFAULT_VALIDATION_SCENARIOS
         }
         metadata_block = {
@@ -331,6 +335,10 @@ def main() -> None:
             "episode_steps": args_cli.episode_steps,
             "terrain_level": args_cli.terrain_level,
             "terrain_profile": args_cli.terrain_profile,
+            "terrain_family_by_column": [
+                TRAINING_TERRAIN_FAMILIES[index]
+                for index in terrain_family_by_column
+            ],
             "curriculum_frozen": True,
             "sim_dt_s": float(env_cfg.sim.dt),
             "policy_dt_s": float(base_env.unwrapped.step_dt),

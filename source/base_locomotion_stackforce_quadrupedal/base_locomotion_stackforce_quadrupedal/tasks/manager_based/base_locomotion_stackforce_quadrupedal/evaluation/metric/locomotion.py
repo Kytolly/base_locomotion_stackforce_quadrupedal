@@ -137,7 +137,13 @@ class LocomotionEpisodeMetrics:
         terrain_types = getattr(terrain, "terrain_types", None)
         terrain_levels = getattr(terrain, "terrain_levels", None)
         if terrain_types is not None:
-            self._episode_terrain_type[env_ids] = terrain_types[env_ids]
+            family_by_column = getattr(terrain, "validation_family_by_column", None)
+            if family_by_column is None:
+                self._episode_terrain_type[env_ids] = terrain_types[env_ids]
+            else:
+                self._episode_terrain_type[env_ids] = family_by_column[
+                    terrain_types[env_ids]
+                ]
         if terrain_levels is not None:
             self._episode_terrain_level[env_ids] = terrain_levels[env_ids]
         command_term = self.env.command_manager.get_term(LOCOMOTION_COMMAND_NAME)
