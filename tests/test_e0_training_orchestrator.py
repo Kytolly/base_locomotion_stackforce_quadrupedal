@@ -52,6 +52,7 @@ stage = values['agent.run_name'].split('_')[-2]
 root = pathlib.Path(os.environ['FAKE_LOG_ROOT']) / 'test_e0'
 run = root / (str(time.time_ns()) + '_' + values['agent.run_name'])
 run.mkdir(parents=True)
+print('LIVE_OUTPUT:' + stage, flush=True)
 (run / 'invocation.json').write_text(json.dumps(values))
 (run / 'training_contract.json').write_text('{}')
 (run / 'agent.yaml').write_text('{}')
@@ -88,6 +89,12 @@ def test_four_stages_use_exact_previous_checkpoint_and_profiles(tmp_path):
     matrix, trainer, log_root, env = _fixture(tmp_path)
     result = _run(matrix, trainer, env)
     assert result.returncode == 0, result.stderr
+    assert [line for line in result.stdout.splitlines() if line.startswith("LIVE_OUTPUT:")] == [
+        "LIVE_OUTPUT:foundation",
+        "LIVE_OUTPUT:expansion",
+        "LIVE_OUTPUT:composition",
+        "LIVE_OUTPUT:consolidation",
+    ]
     runs = sorted((log_root / "test_e0").iterdir(), key=lambda p: p.stat().st_mtime_ns)
     assert len(runs) == 4
     expected = [

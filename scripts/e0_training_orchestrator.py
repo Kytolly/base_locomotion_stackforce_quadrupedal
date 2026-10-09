@@ -115,6 +115,33 @@ def _write_manifest(path: Path, experiment: str, seed: int, records: list[dict[s
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _run_and_tee(command: list[str], audit) -> int:
+    environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        message = f"[E0] unable to start training: {exc}\n"
+        sys.stderr.write(message)
+        audit.write(message)
+        audit.flush()
+        return 127
+    assert process.stdout is not None
+    for line in process.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        audit.write(line)
+        audit.flush()
+    return process.wait()
+
+
 def main() -> int:
     args = _args()
     if args.completed_stage and args.start_stage != "foundation":
@@ -174,14 +201,10 @@ def main() -> int:
             audit.write("[E0] " + " ".join(command) + "\n")
             audit.flush()
             launched_at = time.time()
-            try:
-                with orchestration_log.open("a", encoding="utf-8") as output:
-                    result = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT, check=False)
-            except OSError:
-                result = subprocess.CompletedProcess(command, 127)
-            if result.returncode != 0:
-                print(f"[E0] {stage} failed with exit code {result.returncode}; logs retained at {orchestration_log}", file=sys.stderr)
-                return result.returncode
+            return_code = _run_and_tee(command, audit)
+            if return_code != 0:
+                print(f"[E0] {stage} failed with exit code {return_code}; logs retained at {orchestration_log}", file=sys.stderr)
+                return return_code
             run = _find_run(log_parent, run_name, checkpoint_name, final_iteration, after=launched_at)
             state = _load_checkpoint(run / checkpoint_name)
             record = {
