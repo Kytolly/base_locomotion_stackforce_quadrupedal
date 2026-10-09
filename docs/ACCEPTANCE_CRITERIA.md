@@ -4,6 +4,8 @@
 
 These gates assess whether the controller continuously converts body-frame velocity and body-height intent into stable wheel/leg actuator targets over supported terrain. Passing a smoke test or observing one successful rollout does not qualify a policy.
 
+The current training baseline is E0-v1-46d (46D Actor, 62D Critic, 12D action). These gates apply to a frozen checkpoint; the separate 108D Hybrid proposal does not redefine that baseline. No current E0 checkpoint is claimed to pass these gates. Execution commands use `env_isaaclab` as specified in [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md).
+
 ## Physical qualification gates
 
 | Gate | PASS condition | Evidence |
@@ -17,7 +19,7 @@ Until these gates pass, friction, actuator, and collision parameters remain qual
 
 ## Frozen policy thresholds
 
-The following initial acceptance thresholds are enforced by `scripts/validate_policy.py` report generation. Every one of the five command scenarios must pass. Across eight terrain families, every family must be represented, all episodes must finish as timeouts, and the worst-family result must pass each safety/coverage threshold.
+The following initial acceptance thresholds are enforced by `scripts/validate_policy.py` report generation. Every one of the five command scenarios and every terrain family must pass. All episodes must finish (timeout or measured unsafe termination); timeout survival must be at least 95% in every family. Validation freezes curriculum, uses all eight levels with at least 64 environments (a multiple of 64), and runs each scenario for 30 seconds. A shorter smoke or a single-level diagnostic cannot produce performance PASS.
 
 | Metric | PASS threshold |
 | --- | ---: |
@@ -33,7 +35,7 @@ The following initial acceptance thresholds are enforced by `scripts/validate_po
 | 95th percentile episode maximum base tilt | <= 1.05 rad |
 | Runtime finite rate | 100% |
 
-Plateau and Washboard additionally require a complete timeout episode, every track gate crossed in sequence, no lateral corridor violation, no unsafe termination, and finite monitored values. Repeated benchmark acceptance requires five distinct seeds for both nominal and randomized track geometry; each run must pass.
+Plateau and Washboard require the same numerical gates, a complete timeout episode, every track gate crossed in sequence, no lateral corridor violation, no unsafe termination, and finite monitored values. Zero policies cannot qualify. Repeated benchmark acceptance requires five distinct seeds for both nominal and randomized track geometry; each run must pass. Nominal repeats verify reproducibility, not independent geometric generalization.
 
 ## Evidence status
 

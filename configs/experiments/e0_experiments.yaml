@@ -1,0 +1,125 @@
+schema_version: 1
+base_config: configs/train/base_locomotion_e0_46d.yaml
+seeds: [42, 43, 44]
+terrain_stages:
+  foundation: {profile: union_foundation, iterations: 1000}
+  expansion: {profile: union_expansion, iterations: 5000}
+  composition: {profile: union_composition, iterations: 7000}
+  consolidation: {profile: union_consolidation, iterations: 7000}
+
+experiments:
+  b0_t1_ppo:
+    batch: B0
+    overrides: {}
+  b1_moe_core:
+    batch: B1
+    overrides:
+      agent.actor.architecture: sparse_moe
+      agent.critic.architecture: sparse_moe
+  b2_moe_reflex:
+    batch: B2-A
+    overrides:
+      agent.actor.architecture: sparse_moe
+      agent.actor.reflex_enabled: true
+      agent.critic.architecture: sparse_moe
+  b2_bisec_full:
+    batch: B2-B
+    overrides:
+      agent.actor.architecture: sparse_moe
+      agent.actor.reflex_enabled: true
+      agent.critic.architecture: sparse_moe
+      agent.algorithm.gate_entropy_coef: 0.03
+      agent.algorithm.expert_orthogonality_coef: 0.03
+      agent.algorithm.temporal_consistency_coef: 0.01
+  a3_minus_ent:
+    batch: B3
+    parent: b2_bisec_full
+    overrides: {agent.algorithm.gate_entropy_coef: 0.0}
+  a3_minus_ortho:
+    batch: B3
+    parent: b2_bisec_full
+    overrides: {agent.algorithm.expert_orthogonality_coef: 0.0}
+  a3_minus_temp:
+    batch: B3
+    parent: b2_bisec_full
+    overrides: {agent.algorithm.temporal_consistency_coef: 0.0}
+  a4_ppo_total_capacity:
+    batch: B3
+    overrides:
+      agent.actor.hidden_dims: [360, 360]
+      agent.critic.hidden_dims: [360, 360]
+  a4_ppo_active_capacity:
+    batch: B3
+    overrides:
+      agent.actor.hidden_dims: [208, 208]
+      agent.critic.hidden_dims: [208, 208]
+  p0_no_privileged_t1:
+    batch: B3
+    overrides: {agent.obs_groups.critic: [policy]}
+  p0_no_privileged_full:
+    batch: B3
+    parent: b2_bisec_full
+    overrides: {agent.obs_groups.critic: [policy]}
+  p1_history_t1:
+    batch: B3
+    overrides:
+      task: Base-Locomotion-Stackforce-Quadrupedal-History-v0
+      protocol_version: E0-v1-P1-history
+      actor_observation_dim: 184
+  p1_history_full:
+    batch: B3
+    parent: b2_bisec_full
+    overrides:
+      task: Base-Locomotion-Stackforce-Quadrupedal-History-v0
+      protocol_version: E0-v1-P1-history
+      actor_observation_dim: 184
+  p2_terrain_t1:
+    batch: B3
+    overrides:
+      task: Base-Locomotion-Stackforce-Quadrupedal-Terrain-v0
+      protocol_version: E0-v1-P2-terrain
+      actor_observation_dim: 76
+  p2_terrain_full:
+    batch: B3
+    parent: b2_bisec_full
+    overrides:
+      task: Base-Locomotion-Stackforce-Quadrupedal-Terrain-v0
+      protocol_version: E0-v1-P2-terrain
+      actor_observation_dim: 76
+  p3_history_terrain_t1:
+    batch: B3
+    overrides:
+      task: Base-Locomotion-Stackforce-Quadrupedal-History-Terrain-v0
+      protocol_version: E0-v1-P3-history-terrain
+      actor_observation_dim: 304
+  p3_history_terrain_full:
+    batch: B3
+    parent: b2_bisec_full
+    overrides:
+      task: Base-Locomotion-Stackforce-Quadrupedal-History-Terrain-v0
+      protocol_version: E0-v1-P3-history-terrain
+      actor_observation_dim: 304
+  fixed_curriculum_t1:
+    batch: B3
+    overrides:
+      curriculum.terrain_levels: null
+      curriculum.motion_family: null
+      curriculum.robustness_bin: null
+  fixed_curriculum_full:
+    batch: B3
+    parent: b2_bisec_full
+    overrides:
+      curriculum.terrain_levels: null
+      curriculum.motion_family: null
+      curriculum.robustness_bin: null
+
+regularizer_sweep:
+  parent: b2_moe_reflex
+  gate_entropy_coef: [0.0, 0.01, 0.03, 0.05]
+  expert_orthogonality_coef: [0.0, 0.01, 0.03, 0.05]
+  temporal_consistency_coef: [0.0, 0.01]
+
+evaluation_profiles:
+  main: union_consolidation
+  deep_robotics_source_alignment: source_alignment
+  legacy_zero_shot: legacy_equal

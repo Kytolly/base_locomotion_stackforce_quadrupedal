@@ -21,6 +21,7 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
     split_actor_input,
 )
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.policy.commands import compose_velocity_command
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.policy.commands import LocomotionCommandCfg
 
 
 def test_actor_input_segments_cover_the_flat_observation() -> None:
@@ -69,3 +70,13 @@ def test_contracts_reject_wrong_trailing_dimension(splitter, width: int) -> None
 )
 def test_command_modes_preserve_body_frame_intent(mode: int, expected: tuple[float, ...]) -> None:
     assert compose_velocity_command(mode, 0.3, 0.1, -0.2) == expected
+
+
+def test_training_command_mix_is_forward_dominant_without_dropping_modes() -> None:
+    probabilities = LocomotionCommandCfg().mode_probabilities
+
+    assert len(probabilities) == 7
+    assert sum(probabilities) == pytest.approx(1.0)
+    assert all(probability > 0.0 for probability in probabilities)
+    assert probabilities[1] + probabilities[5] == pytest.approx(0.5)
+    assert probabilities[2] + probabilities[6] == pytest.approx(0.2)

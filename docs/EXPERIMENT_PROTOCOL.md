@@ -1,91 +1,125 @@
 # 实验、日志、模型与 W&B 约定
 
-## 目录职责
+本文是 E0-46D 的执行参考；训练设计见 [TRAINING_DESIGN.md](TRAINING_DESIGN.md)，性能门槛见 [ACCEPTANCE_CRITERIA.md](ACCEPTANCE_CRITERIA.md)。以下命令均在 `base_locomotion_stackforce_quadrupedal/` 项目根目录执行，并使用 `env_isaaclab`，不要使用 Anaconda base 的 Python。
+
+## 目录与结果合同
 
 ```text
-docs/       当前规范、状态、实验报告；不要写原始运行输出
-logs/       原始 stdout/stderr、启动失败、探针和训练日志
-output/     导出的 checkpoint、TorchScript/ONNX、评估 JSON、图表和视频
+docs/       当前规范、状态、实验报告；不存原始运行输出
+logs/       stdout/stderr、启动失败、探针与训练日志
+output/     发布模型、评估 JSON、图表与视频
 source/     Isaac Lab 扩展与任务实现
 ```
 
-`logs/` 和 `output/` 是生成目录，内容不应提交到版本库。每次运行必须在日志首行或旁边的 JSON 中记录任务名、代码版本、seed、设备、环境数、仿真频率、policy 频率和 W&B run id。
+`logs/` 和 `output/` 为生成目录，不应提交。RSL-RL 在 `logs/rsl_rl/<experiment_name>/<timestamp>_<run_name>/` 同时保存参数快照和 checkpoint；发布时另行导出到 `output/models/<task>/<run>/`，评估结果写到 `output/evaluation/<task>/<run>/`，记录来源 checkpoint。
 
-当前 Isaac Lab/RSL-RL 脚本把 runner 的运行目录创建在 `logs/rsl_rl/<experiment_name>/<timestamp>_<run_name>/`，其中会同时出现参数快照和 checkpoint。这是框架当前行为；完成 locomotion 任务后，发布模型必须额外导出到 `output/models/<task>/<run>/`，评估结果写入 `output/evaluation/<task>/<run>/`，并在报告中记录来源 checkpoint 的路径。
+每个实验必须记录任务名、代码版本、配置快照、seed、设备、环境数、物理/策略频率、动作与观测合同、checkpoint 路径及固定验证结果。正式 W&B 实验还需记录 run id/URL；无网络可用 offline 模式保留本地 run，恢复后同步。没有 run id 的本地诊断不得标记为正式 W&B 实验。
 
-## W&B 命名合同
+## 配置与启动
 
-复杂任务 YAML 默认使用 W&B 和项目名 `stackforce-quadrupedal-locomotion`，默认 `launcher.viz: kit`。正式训练直接从 YAML 启动，OmegaConf dotlist 可覆盖单个字段：
+主线为 `configs/train/base_locomotion_e0_46d.yaml`：46D Actor、62D Critic、4096 环境、24 steps/env、20000 iterations。E0 显示默认值是 `launcher.viz: none`；当前工作区 YAML 设置 `wandb.enabled: true`、`wandb.mode: online`。命令显式写出关键覆盖，避免依赖本地 YAML 改动。
 
-```bash
-python scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_complex.yaml \
-  agent.run_name=seed42 launcher.viz=kit
-```
-
-验收或无显示环境可显式覆盖 `launcher.viz=none`；正式 GUI 训练保持 YAML 默认 `kit`，并可通过 `launcher.max_visible_envs` 控制显示环境数量。
-
-建议的 W&B 字段：
-
-```text
-project: stackforce-quadrupedal-locomotion
-group: <protocol-or-stage>
-run_name: <task>_<terrain>_seed<seed>_<short-label>
-tags: [base-locomotion, <stage>, <terrain-family>]
-```
-
-每个 run 至少同步：
-
-- `task`、`seed`、`git_commit`、`device`、`num_envs`、`sim_dt`、`decimation`；
-- 4 维原始/整形 Decision、30 维本体观测和 12 维动作的维度与缩放版本；
-- `train/locomotion/*`、`train/safety/*`、`train/terrain/*`、`train/actuation/*`、`train/reward/*`、`train/runtime/*`；
-- 每 episode 的地形族、难度、地形 seed、终止类型/原因和有限值状态；
-- checkpoint 路径、导出文件路径和固定验证集结果。
-
-无网络或凭据不可用时可使用 `WANDB_MODE=offline`，但必须保留本地 run 目录和 run id，并在网络恢复后执行同步。禁止把没有 W&B id 的训练结果标记为正式实验。
-
-## 分阶段命令
-
-### 1. 模板安装/注册检查
+配置检查不启动 Isaac Sim：
 
 ```bash
-python -m pip install -e source/base_locomotion_stackforce_quadrupedal
-python scripts/list_envs.py --keyword Template-
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
+  --config configs/train/base_locomotion_e0_46d.yaml --validate-config
 ```
 
-### 2. Locomotion 实现后的 PPO smoke
+短测只验证管线，不证明策略性能：
 
 ```bash
-python scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_complex.yaml \
-  launcher.viz=kit env.num_envs=8 agent.max_iterations=10 \
-  agent.run_name=smoke_seed0 wandb.mode=offline 2>&1 | tee logs/ppo_smoke_seed0.log
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
+  --config configs/train/base_locomotion_e0_46d.yaml \
+  launcher.viz=none env.num_envs=128 agent.max_iterations=1 \
+  agent.run_name=e0_46d_smoke wandb.enabled=false
 ```
 
-### 3. 固定 benchmark GUI 验收
+完整长训练命令（20000 iterations，须由运行者主动启动）：
 
 ```bash
-python scripts/run_benchmark.py \
-  --config configs/benchmark/plateau.yaml \
-  launcher.viz=kit policy.zero_policy=false \
-  policy.checkpoint=output/models/<task>/<run>/model_<N>.pt
-python scripts/run_benchmark.py \
-  --config configs/benchmark/washboard.yaml \
-  launcher.viz=kit policy.zero_policy=false \
-  policy.checkpoint=output/models/<task>/<run>/model_<N>.pt
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
+  --config configs/train/base_locomotion_e0_46d.yaml \
+  launcher.viz=none wandb.enabled=true wandb.mode=online \
+  env.seed=42 agent.run_name=e0_46d_seed42
 ```
 
-### 4. checkpoint 播放与导出
+GUI 可覆盖 `launcher.viz=kit launcher.max_visible_envs=16`；可见环境数量不减少 `env.num_envs`，也不减少物理 rollout。离线记录须同时设置 `wandb.enabled=true wandb.mode=offline`。各独立 seed 使用独立 run name；不要从旧 V0 或不同动作分布的 checkpoint 恢复 E0，恢复时须核对环境与分布合同。
+
+W&B 项目为 `stackforce-quadrupedal-locomotion`，E0 group 为 `e0-46d`。建议命名 `<task>_<stage>_seed<seed>_<label>`，tags 包含任务、阶段和协议。历史吞吐见 [TRAINING_SCALE_REPORT.md](TRAINING_SCALE_REPORT.md)，不是当前 run 的耗时保证。
+
+## 日志开关与当前限制
+
+推荐仅开启 `core`、`safety`、`runtime`。下面是精简配置建议，不是当前工作区 YAML 的逐字快照（当前文件全部组为 true）：
+
+```yaml
+logging:
+  metrics:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: false
+      support: false
+      actuation: false
+      terrain: false
+      motion: false
+      reward: false
+  wandb_panels:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: false
+      support: false
+      actuation: false
+      terrain: false
+      motion: false
+      reward: false
+```
+
+设计合同是：`metrics` 控制逐步采集和 episode 聚合，`wandb_panels` 控制自定义指标写入日志后端（W&B/TensorBoard），不是直接删除 W&B 网页上的现有面板。采集开启、面板关闭可以用于只保留诊断数据；`enabled=false` 设计上关闭对应全部组。RSL-RL 内建 reward、episode length、loss、KL、timing 等标量不受这两个自定义组开关控制。
+
+**已知实现限制：** 两个训练入口先调用 `resolve_metric_logging_config`，`TrainingMetricsWrapper` 又对其结果解析一次；解析器期待原始 `metrics/wandb_panels` 结构，而第一次结果为 `metric_groups/panel_groups`。因此通过这两个入口设置的自定义组和 `enabled` 覆盖会回退到解析器默认值（core/safety/runtime 开启，扩展组关闭）。不能把 YAML 设置为 true 当作扩展指标已生效的证据。此问题需要代码修复及入口集成测试；健康度指标及诊断组对应关系见 [TRAINING_HEALTH_METRICS.md](TRAINING_HEALTH_METRICS.md)。
+
+## 注册、评估与导出
+
+安装与注册检查：
 
 ```bash
-python scripts/rsl_rl/play_rsl_rl.py \
-  --task <LOCOMOTION_TASK> \
-  --checkpoint logs/rsl_rl/<experiment>/<run>/model_<N>.pt \
-  --num_envs 1
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python -m pip install -e source/base_locomotion_stackforce_quadrupedal
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/list_envs.py --keyword Base-Locomotion-Stackforce-Quadrupedal
 ```
 
-播放前先将待评估 checkpoint 复制或导出到 `output/models/`，并将评估 JSON、视频和导出策略放到同一个 output run 目录。评估不得执行 PPO 更新。
+冻结 checkpoint 验证默认不上传 W&B；需要时显式开启：
 
-## 结果登记
+```bash
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/validate_policy.py \
+  --checkpoint logs/rsl_rl/base_locomotion_e0_46d/<run>/model_<N>.pt \
+  --wandb --wandb-mode online
+```
 
-每次实验完成后，在 `docs/` 增加一份短报告，至少包含：目的、代码提交、配置/seed、W&B URL 或 offline run id、原始日志路径、模型路径、验证指标、失败原因和下一步。报告只引用机器输出，不手工改写指标。
+它不执行 PPO 更新。上传 checkpoint 路径/SHA256、seed、git commit、五 command 整体/terrain 指标与 `performance_pass`。完整 suite 使用 `scripts/evaluate_suite.py --checkpoint <checkpoint> --wandb`，为每个 validation seed 建立独立 run。不要并发启动训练与验证的独立 PhysX 进程争用 GPU；共享 Kit 流程须在 checkpoint 写盘后暂停训练再评估。
+
+固定 benchmark 用冻结策略，零动作只作 smoke：
+
+```bash
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/run_benchmark.py \
+  --config configs/benchmark/plateau.yaml launcher.viz=kit \
+  policy.zero_policy=false policy.checkpoint=output/models/<task>/<run>/model_<N>.pt
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/run_benchmark.py \
+  --config configs/benchmark/washboard.yaml launcher.viz=kit \
+  policy.zero_policy=false policy.checkpoint=output/models/<task>/<run>/model_<N>.pt
+```
+
+播放与策略导出入口：
+
+```bash
+/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/play_rsl_rl.py \
+  --task Base-Locomotion-Stackforce-Quadrupedal-Complex-v0 \
+  --checkpoint logs/rsl_rl/base_locomotion_e0_46d/<run>/model_<N>.pt --num_envs 1
+```
+
+每次实验报告至少包含目的、代码版本、配置/seed、W&B URL 或 offline id、日志与模型路径、验证指标、失败原因和下一步。历史报告数值保留，不用当前配置重解释旧结果；只引用机器输出，不手工改写指标。

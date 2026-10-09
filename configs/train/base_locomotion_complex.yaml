@@ -1,37 +1,69 @@
-schema_version: 1
+schema_version: 2
+protocol_version: E0-v1-46d
+actor_observation_dim: 46
 task: Base-Locomotion-Stackforce-Quadrupedal-Complex-v0
 
 launcher:
   device: cuda:0
-  viz: kit
+  viz: none
   enable_cameras: false
   max_visible_envs: 16
   use_fabric: true
 
 env:
-  num_envs: 64
+  # 4096 is the validated starting point for the 16 GB RTX 5080 profile.
+  # Raise to 8192 only with the matching PhysX buffer override below.
+  num_envs: 4096
   seed: 42
+  terrain_profile: union_expansion
   sim_dt: 0.005
   decimation: 4
   render_interval: 4
   episode_length_s: 30.0
+  physics:
+    # Required by GPU broadphase at 4096 environments; 8192 uses 268435456.
+    gpu_found_lost_aggregate_pairs_capacity: 67108864
+
+curriculum:
+  terrain_levels:
+    params:
+      tracking_rmse_range: [0.30, 0.18]
+      yaw_rmse_range: [0.35, 0.20]
+      progress_ratio_range: [0.60, 0.80]
+      demotion_progress_ratio: 0.25
+  motion_family:
+    params:
+      success_tracking_rmse: 0.30
+      success_yaw_rmse: 0.35
+      sampling_floor: 0.05
+  robustness_bin:
+    params:
+      nominal_level: 0
+      moderate_level: 2
+      stress_level: 5
 
 agent:
   num_steps_per_env: 24
-  max_iterations: 10000
+  max_iterations: 20000
   save_interval: 250
   experiment_name: base_locomotion_complex
-  run_name: complex_seed42
+  run_name: directional_curriculum_seed42_v7_formal20k
   clip_actions: 1.0
   resume: false
-  load_run: .*
-  load_checkpoint: model_.*.pt
+  # Resume must name one exact run and checkpoint. Wildcards can silently load
+  # a different experiment when multiple runs share the same log root.
+  load_run: null
+  load_checkpoint: null
   actor:
     hidden_dims: [128, 128]
     activation: elu
     obs_normalization: false
     distribution_cfg:
-      init_std: 0.5
+      class_name: base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution
+      init_std: 0.3
+      std_type: log
+      min_std: 0.05
+      max_std: 0.5
   critic:
     hidden_dims: [128, 128]
     activation: elu
@@ -43,7 +75,7 @@ agent:
     schedule: adaptive
     gamma: 0.99
     lam: 0.95
-    entropy_coef: 0.005
+    entropy_coef: 0.001
     desired_kl: 0.01
     max_grad_norm: 1.0
     value_loss_coef: 1.0
@@ -67,3 +99,30 @@ video:
 runtime:
   log_root: logs/rsl_rl
   init_at_random_episode_length: true
+  allow_terrain_stage_resume: false
+
+logging:
+  metrics:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: false
+      support: false
+      actuation: false
+      terrain: false
+      motion: false
+      reward: false
+  wandb_panels:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: false
+      support: false
+      actuation: false
+      terrain: false
+      motion: false
+      reward: false

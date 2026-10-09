@@ -27,6 +27,13 @@ def local_support_height(
     wheel_valid = contact.sum(dim=1) >= 2
 
     hits = env.scene[sensor_cfg.name].data.ray_hits_w
+    if hasattr(env, "benchmark_track_parameters"):
+        from base_locomotion_stackforce_quadrupedal.benchmark.surface import track_surface_height
+
+        # The scanner targets the ground plane; replace its Z with the actual
+        # static track surface, including Cylinder/Cube primitives.
+        hits = hits.clone()
+        hits[..., 2] = track_surface_height(env.benchmark_track_parameters, hits[..., :2])
     ray_valid = torch.isfinite(hits).all(dim=-1) & (hits[..., 2] < root[:, 2:3] + 0.15)
     ray_values = torch.where(ray_valid, hits[..., 2], torch.nan)
     ray_height = torch.nanmedian(ray_values, dim=1).values

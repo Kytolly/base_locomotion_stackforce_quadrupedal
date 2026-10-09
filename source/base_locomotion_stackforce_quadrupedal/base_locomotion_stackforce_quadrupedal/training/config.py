@@ -64,6 +64,39 @@ def validate_training_config(config: DictConfig) -> None:
         ),
     )
     _validate_launcher(config)
+    protocol_version = str(config.get("protocol_version", ""))
+    if protocol_version.endswith("46d") and protocol_version != "E0-v1-46d":
+        raise ValueError(f"Unsupported 46D protocol version: {protocol_version!r}.")
+    if protocol_version == "E0-v1-46d" and int(config.get("actor_observation_dim", 0)) != 46:
+        raise ValueError("E0-v1-46d requires actor_observation_dim=46.")
+    if int(config.get("actor_observation_dim", 0)) <= 0:
+        raise ValueError("actor_observation_dim must be positive.")
+    if config.get("curriculum"):
+        required_curricula = ("terrain_levels", "motion_family", "robustness_bin")
+        missing_curricula = [name for name in required_curricula if name not in config.curriculum]
+        if missing_curricula:
+            raise ValueError(
+                "46D E0 training requires independent curriculum sections: "
+                + ", ".join(missing_curricula)
+            )
+    logging = config.get("logging", {})
+    for section in ("metrics", "wandb_panels"):
+        section_config = logging.get(section, {})
+        if not isinstance(section_config.get("enabled", True), bool):
+            raise ValueError(f"logging.{section}.enabled must be a boolean.")
+        groups = section_config.get("groups", {})
+        allowed_groups = {
+            "core", "safety", "runtime", "command", "support",
+            "actuation", "terrain", "motion", "reward",
+        }
+        unknown = sorted(set(groups) - allowed_groups)
+        if unknown:
+            raise ValueError(f"Unknown logging.{section}.groups entries: {', '.join(unknown)}")
+        non_boolean = [name for name, value in groups.items() if not isinstance(value, bool)]
+        if non_boolean:
+            raise ValueError(
+                f"logging.{section}.groups values must be booleans: {', '.join(non_boolean)}"
+            )
     positive = {
         "env.num_envs": config.env.num_envs,
         "env.sim_dt": config.env.sim_dt,
@@ -74,8 +107,77 @@ def validate_training_config(config: DictConfig) -> None:
     invalid = [name for name, value in positive.items() if float(value) <= 0]
     if invalid:
         raise ValueError(f"Configuration values must be positive: {', '.join(invalid)}")
+    physics_values = config.env.get("physics", {})
+    invalid_physics = [
+        f"env.physics.{name}"
+        for name, value in physics_values.items()
+        if float(value) <= 0
+    ]
+    if invalid_physics:
+        raise ValueError(
+            f"Configuration values must be positive: {', '.join(invalid_physics)}"
+        )
+    terrain_profile = config.env.get("terrain_profile")
+    if terrain_profile is not None:
+        allowed_terrain_profiles = {
+            "legacy_equal",
+            "union_foundation",
+            "union_expansion",
+            "union_composition",
+            "union_consolidation",
+            "source_alignment",
+        }
+        if str(terrain_profile) not in allowed_terrain_profiles:
+            raise ValueError(
+                f"Unknown env.terrain_profile {terrain_profile!r}; "
+                f"expected one of {sorted(allowed_terrain_profiles)}."
+            )
     if bool(config.wandb.enabled) and not str(config.wandb.project).strip():
         raise ValueError("wandb.project must be non-empty when W&B is enabled.")
+    if bool(config.agent.get("resume", False)):
+        load_run = config.agent.get("load_run")
+        load_checkpoint = config.agent.get("load_checkpoint")
+        if not load_run or not load_checkpoint:
+            raise ValueError(
+                "agent.resume=true requires exact agent.load_run and "
+                "agent.load_checkpoint values."
+            )
+        pattern_tokens = ("*", "?", "[", "]", "(", ")", "|", "+", "^", "$", "\\")
+        if any(token in str(load_run) for token in pattern_tokens) or any(
+            token in str(load_checkpoint) for token in pattern_tokens
+        ):
+            raise ValueError(
+                "Resume selectors must be exact names; regular expressions and "
+                "wildcards are not allowed."
+            )
+        if not str(load_checkpoint).endswith(".pt"):
+            raise ValueError("agent.load_checkpoint must name one .pt checkpoint file.")
+    distribution = config.agent.get("actor", {}).get("distribution_cfg", {})
+    if str(distribution.get("class_name", "")).endswith(":SquashedGaussianDistribution"):
+        if distribution.get("std_type") != "log" or not (
+            0 < float(distribution.get("min_std", 0))
+            <= float(distribution.get("init_std", 0))
+            <= float(distribution.get("max_std", 0))
+            <= 0.5
+        ):
+            raise ValueError("Bounded policy requires log std and 0 < min_std <= init_std <= max_std <= 0.5.")
+    for model_name in ("actor", "critic"):
+        model = config.agent.get(model_name, {})
+        architecture = str(model.get("architecture", "mlp"))
+        if architecture not in {"mlp", "sparse_moe"}:
+            raise ValueError(f"Unknown agent.{model_name}.architecture: {architecture!r}.")
+        if architecture == "sparse_moe":
+            num_experts = int(model.get("num_experts", 6))
+            top_k = int(model.get("top_k", 2))
+            if not 1 <= top_k <= num_experts:
+                raise ValueError(f"agent.{model_name}.top_k must be in [1, num_experts].")
+    for coefficient in (
+        "gate_entropy_coef",
+        "expert_orthogonality_coef",
+        "temporal_consistency_coef",
+    ):
+        if float(config.agent.get("algorithm", {}).get(coefficient, 0.0)) < 0.0:
+            raise ValueError(f"agent.algorithm.{coefficient} must be non-negative.")
 
 
 def validate_benchmark_config(config: DictConfig) -> None:
@@ -102,6 +204,8 @@ def validate_benchmark_config(config: DictConfig) -> None:
         )
     if int(config.benchmark.max_steps) <= 0:
         raise ValueError("benchmark.max_steps must be positive.")
+    if float(config.benchmark.get("episode_length_s", 35.0)) <= 0:
+        raise ValueError("benchmark.episode_length_s must be positive.")
 
 
 def apply_config(

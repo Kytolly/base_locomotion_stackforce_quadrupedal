@@ -9,6 +9,7 @@ version = "0.1.0"
 description = "Isaac Lab source checkout development environment."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "omegaconf>=2.3.0",
     "isaaclab",
     "isaaclab-assets",
     "isaaclab-contrib",

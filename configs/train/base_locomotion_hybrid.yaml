@@ -1,0 +1,101 @@
+schema_version: 1
+task: Base-Locomotion-Stackforce-Quadrupedal-Hybrid-v0
+
+launcher:
+  device: cuda:0
+  viz: none
+  enable_cameras: false
+  max_visible_envs: 16
+  use_fabric: true
+
+env:
+  num_envs: 4096
+  seed: 42
+  sim_dt: 0.005
+  decimation: 4
+  render_interval: 4
+  episode_length_s: 30.0
+  physics:
+    gpu_found_lost_aggregate_pairs_capacity: 67108864
+
+agent:
+  num_steps_per_env: 24
+  max_iterations: 20000
+  save_interval: 250
+  experiment_name: base_locomotion_hybrid
+  run_name: command_tracking_curriculum_v2_seed42
+  clip_actions: 1.0
+  resume: false
+  load_run: null
+  load_checkpoint: null
+  actor:
+    hidden_dims: [128, 128]
+    activation: elu
+    obs_normalization: false
+    distribution_cfg:
+      class_name: base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution
+      init_std: 0.3
+      std_type: log
+      min_std: 0.05
+      max_std: 0.5
+  critic:
+    hidden_dims: [128, 128]
+    activation: elu
+    obs_normalization: false
+  algorithm:
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    learning_rate: 0.001
+    schedule: adaptive
+    gamma: 0.99
+    lam: 0.95
+    entropy_coef: 0.001
+    desired_kl: 0.01
+    max_grad_norm: 1.0
+    value_loss_coef: 1.0
+    use_clipped_value_loss: true
+    clip_param: 0.2
+
+wandb:
+  enabled: true
+  project: stackforce-quadrupedal-locomotion
+  entity: null
+  mode: online
+  group: hybrid-locomotion
+  run_name: ${agent.run_name}
+  tags: [stackforce, quadrupedal, wheel-leg, ppo, hybrid]
+
+video:
+  enabled: false
+  interval: 2000
+  length: 200
+
+runtime:
+  log_root: logs/rsl_rl
+  init_at_random_episode_length: true
+
+logging:
+  metrics:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: false
+      support: false
+      actuation: false
+      terrain: false
+      motion: false
+      reward: false
+  wandb_panels:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: false
+      support: false
+      actuation: false
+      terrain: false
+      motion: false
+      reward: false

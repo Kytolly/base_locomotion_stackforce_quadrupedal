@@ -17,13 +17,14 @@ from isaaclab.envs.mdp import (
     time_out,
 )
 
-from . import action, curriculum, events, observation, policy, reward, support, terminations
+from . import action, curricula, curriculum, events, observation, policy, reward, support, terminations
 from .rewards import joint_pos_target_l2
 
 __all__ = [
     "JointEffortActionCfg",
     "action",
     "curriculum",
+    "curricula",
     "events",
     "is_alive",
     "is_terminated",

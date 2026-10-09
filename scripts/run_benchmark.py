@@ -14,15 +14,32 @@ from omegaconf import OmegaConf
 
 from isaaclab.app import AppLauncher
 
-from base_locomotion_stackforce_quadrupedal.training import (
-    launcher_kwargs,
-    load_config,
-    validate_benchmark_config,
-)
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs/benchmark/plateau.yaml"
+
+
+def _load_yaml_config(path: Path, overrides: list[str]):
+    """Load the launcher contract before importing task modules into Kit."""
+    config = OmegaConf.load(path.expanduser().resolve())
+    if overrides:
+        config = OmegaConf.merge(config, OmegaConf.from_dotlist(overrides))
+    OmegaConf.resolve(config)
+    return config
+
+
+def _launcher_kwargs(config) -> dict[str, object]:
+    viz = str(config.launcher.viz)
+    visualizers = None if viz == "none" else viz.split(",")
+    return {
+        "device": str(config.launcher.device),
+        "visualizer": visualizers,
+        "visualizer_explicit": True,
+        "visualizer_disable_all": viz == "none",
+        "headless": viz == "none",
+        "enable_cameras": bool(config.launcher.get("enable_cameras", False)),
+        "max_visible_envs": int(config.launcher.get("max_visible_envs", 16)),
+    }
 
 
 def _parse_args() -> argparse.Namespace:
@@ -54,14 +71,22 @@ def _git_commit() -> str | None:
 
 def main() -> None:
     args = _parse_args()
-    config = load_config(args.config, args.overrides)
-    validate_benchmark_config(config)
+    config = _load_yaml_config(args.config, args.overrides)
     if args.validate_config:
+        from base_locomotion_stackforce_quadrupedal.training import validate_benchmark_config
+
+        validate_benchmark_config(config)
         print(OmegaConf.to_yaml(config, resolve=True))
         return
 
-    app_launcher = AppLauncher(launcher_kwargs(config))
+    app_launcher = AppLauncher(_launcher_kwargs(config))
     simulation_app = app_launcher.app
+
+    # Importing the project package before AppLauncher starts Kit can leave
+    # SensorBaseCfg classes split across pre-Kit and Kit module instances.
+    from base_locomotion_stackforce_quadrupedal.training import validate_benchmark_config
+
+    validate_benchmark_config(config)
 
     import gymnasium as gym
     import torch
@@ -72,6 +97,9 @@ def main() -> None:
 
     import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401
     from base_locomotion_stackforce_quadrupedal.benchmark import TrackTraversal, track_length
+    from base_locomotion_stackforce_quadrupedal.benchmark.acceptance import passes_thresholds
+    from base_locomotion_stackforce_quadrupedal.training.checkpoint import checkpoint_runner_config
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric import LocomotionEpisodeMetrics
     from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.robots import (
         LEG_JOINTS,
         WHEEL_JOINTS,
@@ -88,6 +116,7 @@ def main() -> None:
         use_fabric=bool(config.launcher.get("use_fabric", True)),
     )
     env_cfg.seed = int(config.benchmark.seed)
+    env_cfg.episode_length_s = float(config.benchmark.get("episode_length_s", 35.0))
     env_cfg.events.spawn_track.params = {
         "kind": str(config.benchmark.kind),
         "seed": int(config.benchmark.seed),
@@ -110,7 +139,7 @@ def main() -> None:
             agent_cfg, metadata.version("rsl-rl-lib")
         )
         runner = OnPolicyRunner(
-            vec_env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device
+            vec_env, checkpoint_runner_config(checkpoint_path, agent_cfg.to_dict()), log_dir=None, device=agent_cfg.device
         )
         runner.load(str(checkpoint_path))
         policy = runner.get_inference_policy(device=agent_cfg.device)
@@ -119,15 +148,17 @@ def main() -> None:
         vec_env.reset()
         env = base_env.unwrapped
         robot = env.scene["robot"]
-        parameters = env.benchmark_track_parameters
-        traversal = TrackTraversal(parameters)
-        traversal.update(
-            float(robot.data.root_pos_w[0, 0].item()),
-            float(robot.data.root_pos_w[0, 1].item()),
-        )
-        leg_ids, _ = robot.find_joints(list(LEG_JOINTS), preserve_order=True)
-        wheel_ids, _ = robot.find_joints(list(WHEEL_JOINTS), preserve_order=True)
-        rewards: list[float] = []
+        metrics = LocomotionEpisodeMetrics(env)
+        snapshot = {}
+
+        def capture_step():
+            metrics.observe_state(env.action_manager.action)
+            metrics.observe_reward(env.reward_buf)
+            for name in ("root_pos_w", "root_lin_vel_b", "joint_vel", "applied_torque"):
+                snapshot[name] = getattr(robot.data, name).clone()
+            snapshot["command"] = env.command_manager.get_command("locomotion").clone()
+
+        env.post_physics_callbacks = [capture_step]
         expected_command = torch.tensor(
             [
                 float(env_cfg.events.fixed_command.params["forward_velocity"]),
@@ -137,6 +168,17 @@ def main() -> None:
             ],
             device=env.device,
         )
+        command_term = env.command_manager.get_term("locomotion")
+        command_term.set_command(expected_command.unsqueeze(0))
+        parameters = env.benchmark_track_parameters
+        traversal = TrackTraversal(parameters)
+        traversal.update(
+            float(robot.data.root_pos_w[0, 0].item()),
+            float(robot.data.root_pos_w[0, 1].item()),
+        )
+        leg_ids, _ = robot.find_joints(list(LEG_JOINTS), preserve_order=True)
+        wheel_ids, _ = robot.find_joints(list(WHEEL_JOINTS), preserve_order=True)
+        rewards: list[float] = []
         initial_command = env.command_manager.get_command("locomotion")[0].clone()
         command_min = initial_command.clone()
         command_max = initial_command.clone()
@@ -153,6 +195,9 @@ def main() -> None:
         truncated_seen = False
 
         for _ in range(int(config.benchmark.max_steps)):
+            # Keep the command fixed even if a future command implementation
+            # resamples during reset or at a manager update boundary.
+            command_term.set_command(expected_command.unsqueeze(0))
             observations = vec_env.get_observations()
             with torch.inference_mode():
                 actions = (
@@ -162,18 +207,17 @@ def main() -> None:
                 )
             y_before = robot.data.root_pos_w[:, 1].clone()
             _, reward, dones, _ = vec_env.step(actions)
-            y_after = robot.data.root_pos_w[:, 1]
+            y_after = snapshot["root_pos_w"][:, 1]
             terminated = bool(env.reset_terminated[0].item())
             truncated = bool(env.reset_time_outs[0].item())
-            if not bool(dones[0].item()):
-                progress += float((y_after - y_before)[0].item())
-                traversal.update(
-                    float(robot.data.root_pos_w[0, 0].item()),
-                    float(robot.data.root_pos_w[0, 1].item()),
-                )
+            progress += float((y_after - y_before)[0].item())
+            traversal.update(
+                float(snapshot["root_pos_w"][0, 0].item()),
+                float(snapshot["root_pos_w"][0, 1].item()),
+            )
 
-            joint_velocity = robot.data.joint_vel
-            joint_torque = robot.data.applied_torque
+            joint_velocity = snapshot["joint_vel"]
+            joint_torque = snapshot["applied_torque"]
             leg_energy += float(
                 torch.sum(
                     torch.abs(joint_velocity[:, leg_ids] * joint_torque[:, leg_ids])
@@ -186,15 +230,15 @@ def main() -> None:
                 ).item()
                 * env.step_dt
             )
-            command = env.command_manager.get_command("locomotion")[:, 0]
-            full_command = env.command_manager.get_command("locomotion")[0]
+            command = snapshot["command"][:, 0]
+            full_command = snapshot["command"][0]
             command_min = torch.minimum(command_min, full_command)
             command_max = torch.maximum(command_max, full_command)
             fixed_command_pass &= bool(
                 torch.allclose(full_command, expected_command, atol=1.0e-6, rtol=0.0)
             )
             tracking_error_sq += float(
-                torch.square(command - robot.data.root_lin_vel_b[:, 1]).mean().item()
+                torch.square(command - snapshot["root_lin_vel_b"][:, 1]).mean().item()
             )
             action_saturation += float(
                 (torch.abs(actions) >= 0.95).float().mean().item()
@@ -204,8 +248,8 @@ def main() -> None:
                 for value in (
                     actions,
                     reward,
-                    robot.data.root_pos_w,
-                    robot.data.root_lin_vel_b,
+                    snapshot["root_pos_w"],
+                    snapshot["root_lin_vel_b"],
                 )
             )
             rewards.append(float(reward[0].item()))
@@ -218,8 +262,28 @@ def main() -> None:
             parameters
         )
         steps = len(rewards)
+        manager = env.termination_manager
+        termination_reasons = []
+        if terminated_seen or truncated_seen:
+            termination_reasons = [
+                name for index, name in enumerate(manager._term_names)
+                if bool(manager._last_episode_dones[0, index])
+            ]
+        episode_metrics = metrics.episode_metrics(
+            torch.tensor([0], device=env.device),
+            torch.tensor([terminated_seen], device=env.device),
+            torch.tensor([truncated_seen], device=env.device),
+            torch.tensor(["base_height" in termination_reasons], device=env.device),
+        )
+        measured = {key: float(value[0].item()) for key, value in episode_metrics.items()}
+        measured["safety/base_tilt_max_p95_rad"] = measured["safety/base_tilt_max_rad"]
+        performance_pass = passes_thresholds(measured)
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "metrics": measured,
+            "performance_pass": performance_pass,
+            "traversal_complete": traversal.complete,
+            "termination_reasons": termination_reasons,
             "task": task,
             "track": str(config.benchmark.kind),
             "seed": int(config.benchmark.seed),
@@ -239,6 +303,8 @@ def main() -> None:
                 and not terminated_seen
                 and all_finite
                 and fixed_command_pass
+                and performance_pass
+                and policy is not None
             ),
             "track_checkpoints_passed": traversal.gate_index,
             "track_checkpoint_count": len(traversal.gates),

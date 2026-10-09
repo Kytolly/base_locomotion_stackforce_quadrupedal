@@ -74,6 +74,63 @@ def track_body_height_exp(
     return _exp_tracking(error, std)
 
 
+def directed_planar_progress(
+    env,
+    command_deadband: float = 0.05,
+    command_name: str = LOCOMOTION_COMMAND_NAME,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward motion in the commanded planar direction without rewarding overspeed."""
+    command = _command(env, command_name)[:, :2]
+    speed = torch.linalg.vector_norm(command, dim=1)
+    direction = command / speed.clamp_min(command_deadband).unsqueeze(1)
+    velocity = env.scene[asset_cfg.name].data.root_lin_vel_b[:, [1, 0]]
+    progress_ratio = torch.sum(velocity * direction, dim=1) / speed.clamp_min(command_deadband)
+    return torch.where(speed >= command_deadband, progress_ratio.clamp(0.0, 1.0), 0.0)
+
+
+def planar_velocity_error_l2(
+    env,
+    command_name: str = LOCOMOTION_COMMAND_NAME,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize planar velocity error even when exponential tracking has saturated."""
+    velocity = env.scene[asset_cfg.name].data.root_lin_vel_b[:, [1, 0]]
+    return torch.sum(torch.square(velocity - _command(env, command_name)[:, :2]), dim=1)
+
+
+def wrong_way_velocity_ratio_l2(
+    env,
+    command_deadband: float = 0.05,
+    command_name: str = LOCOMOTION_COMMAND_NAME,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize velocity opposite to a non-zero planar command."""
+    command = _command(env, command_name)[:, :2]
+    speed = torch.linalg.vector_norm(command, dim=1)
+    direction = command / speed.clamp_min(command_deadband).unsqueeze(1)
+    velocity = env.scene[asset_cfg.name].data.root_lin_vel_b[:, [1, 0]]
+    reverse_ratio = torch.relu(-torch.sum(velocity * direction, dim=1) / speed.clamp_min(command_deadband))
+    penalty = torch.square(reverse_ratio.clamp(max=2.0))
+    return torch.where(speed >= command_deadband, penalty, 0.0)
+
+
+def low_body_height_margin_l2(
+    env,
+    warning_height: float = 0.08,
+    margin: float = 0.02,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Provide a continuous warning before the hard low-body termination."""
+    if warning_height <= 0.0 or margin <= 0.0:
+        raise ValueError("warning_height and margin must be positive.")
+    asset = env.scene[asset_cfg.name]
+    support_height, support_valid = local_support_height(env, asset_cfg=asset_cfg)
+    height = asset.data.root_pos_w[:, 2] - support_height
+    penalty = torch.square(torch.relu((warning_height - height) / margin))
+    return torch.where(support_valid, penalty, torch.ones_like(penalty))
+
+
 def orientation_l2(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:

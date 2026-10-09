@@ -51,3 +51,40 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ComplexPPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Base-Locomotion-Stackforce-Quadrupedal-Stepping-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.env.stepping_env_cfg:SteppingCapabilityEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ComplexPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Base-Locomotion-Stackforce-Quadrupedal-Hybrid-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.env.hybrid_env_cfg:BaseLocomotionHybridEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ComplexPPORunnerCfg",
+    },
+)
+
+for profile_name, config_name in (
+    ("History", "BaseLocomotionHistoryEnvCfg"),
+    ("Terrain", "BaseLocomotionTerrainEnvCfg"),
+    ("History-Terrain", "BaseLocomotionHistoryTerrainEnvCfg"),
+):
+    gym.register(
+        id=f"Base-Locomotion-Stackforce-Quadrupedal-{profile_name}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.env.observation_profile_env_cfg:{config_name}"
+            ),
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ComplexPPORunnerCfg",
+        },
+    )

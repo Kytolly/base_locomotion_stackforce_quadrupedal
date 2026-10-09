@@ -6,8 +6,24 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from base_locomotion_stackforce_quadrupedal.benchmark.acceptance import MAXIMUMS, MINIMUMS, passes_thresholds
 
-from ...env.terrains import TERRAIN_FAMILIES
+from ...env.terrains import TERRAIN_FAMILIES, TRAINING_TERRAIN_FAMILIES
+
+
+VALIDATION_FAMILIES_BY_PROFILE = {
+    "legacy_equal": tuple(
+        family for family in TERRAIN_FAMILIES if family != "hf_pyramid_slope_inv"
+    ),
+    "source_alignment": (
+        "random_rough",
+        "boxes",
+        "pyramid_stairs",
+        "pyramid_stairs_inv",
+        "hf_pyramid_slope",
+        "hf_pyramid_slope_inv",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -48,11 +64,13 @@ def _mean(values: torch.Tensor) -> float:
     return float(values.float().mean().item())
 
 
-def _scenario_report(metrics: dict[str, torch.Tensor]) -> dict[str, Any]:
+def _scenario_report(
+    metrics: dict[str, torch.Tensor], terrain_families: tuple[str, ...]
+) -> dict[str, Any]:
     overall = {
         name: _mean(values)
         for name, values in metrics.items()
-        if name != "terrain/type_id"
+        if name not in {"terrain/type_id", "terrain/route_role_id"}
     }
     tilt = metrics["safety/base_tilt_max_rad"].float()
     overall["safety/base_tilt_max_p50_rad"] = float(torch.quantile(tilt, 0.50).item())
@@ -61,13 +79,15 @@ def _scenario_report(metrics: dict[str, torch.Tensor]) -> dict[str, Any]:
     terrain_type = metrics["terrain/type_id"].long()
     families: dict[str, dict[str, float | int]] = {}
     observed_families: list[str] = []
-    for family_id, family in enumerate(TERRAIN_FAMILIES):
+    for family in terrain_families:
+        family_id = TRAINING_TERRAIN_FAMILIES.index(family)
         mask = terrain_type == family_id
         if not bool(mask.any()):
             families[family] = {"episodes": 0}
             continue
         observed_families.append(family)
         family_result: dict[str, float | int] = {"episodes": int(mask.sum().item())}
+        family_result["safety/base_tilt_max_p95_rad"] = float(torch.quantile(tilt[mask], 0.95).item())
         for name in CORE_FAMILY_METRICS:
             output_name = (
                 "safety/timeout_survival_rate" if name == "safety/timeout" else name
@@ -101,9 +121,9 @@ def _scenario_report(metrics: dict[str, torch.Tensor]) -> dict[str, Any]:
         "terrain_coverage": {
             "observed": observed_families,
             "missing": [
-                family for family in TERRAIN_FAMILIES if family not in observed_families
+                family for family in terrain_families if family not in observed_families
             ],
-            "complete": len(observed_families) == len(TERRAIN_FAMILIES),
+            "complete": len(observed_families) == len(terrain_families),
         },
     }
 
@@ -113,8 +133,12 @@ def build_validation_report(
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Build a JSON-serializable report with checkpoint-selection evidence."""
+    terrain_families = VALIDATION_FAMILIES_BY_PROFILE.get(
+        str(metadata.get("terrain_profile", "union_consolidation")), TERRAIN_FAMILIES
+    )
     scenarios = {
-        name: _scenario_report(metrics) for name, metrics in scenario_metrics.items()
+        name: _scenario_report(metrics, terrain_families)
+        for name, metrics in scenario_metrics.items()
     }
     expected_scenarios = {scenario.name for scenario in DEFAULT_VALIDATION_SCENARIOS}
     complete_commands = expected_scenarios.issubset(scenarios)
@@ -128,35 +152,25 @@ def build_validation_report(
     all_finite = all(
         result["overall"]["runtime/all_finite"] == 1.0 for result in scenarios.values()
     )
-    thresholds = {
-        "forward_velocity_rmse_mps_max": 0.15,
-        "lateral_velocity_rmse_mps_max": 0.12,
-        "yaw_rate_rmse_radps_max": 0.10,
-        "body_height_rmse_m_max": 0.025,
-        "unsafe_termination_rate_max": 0.05,
-        "base_collision_rate_max": 0.01,
-        "support_invalid_rate_max": 0.01,
-        "wheel_contact_fraction_min": 0.50,
-        "action_saturation_rate_max": 0.05,
-        "base_tilt_max_p95_rad_max": 1.05,
-    }
-    performance_pass = complete_commands and complete_terrains and complete_episodes and all_finite
+    thresholds = {"maximum": MAXIMUMS, "minimum": {**MINIMUMS, "safety/timeout": 0.95}}
+    protocol_complete = (
+        metadata.get("policy") == "checkpoint"
+        and metadata.get("curriculum_frozen") is True
+        and metadata.get("terrain_level") == -1
+        and metadata.get("num_envs", 0) >= 64
+        and metadata.get("num_envs", 0) % 64 == 0
+        and metadata.get("episode_steps", 0) * metadata.get("policy_dt_s", 0) >= 30.0
+    )
+    performance_pass = complete_commands and complete_terrains and complete_episodes and all_finite and protocol_complete
     for result in scenarios.values():
         overall = result["overall"]
-        performance_pass &= (
-            overall["locomotion/forward_velocity_rmse_mps"] <= thresholds["forward_velocity_rmse_mps_max"]
-            and overall["locomotion/lateral_velocity_rmse_mps"] <= thresholds["lateral_velocity_rmse_mps_max"]
-            and overall["locomotion/yaw_rate_rmse_radps"] <= thresholds["yaw_rate_rmse_radps_max"]
-            and overall["locomotion/body_height_rmse_m"] <= thresholds["body_height_rmse_m_max"]
-            and overall["safety/unsafe_termination"] <= thresholds["unsafe_termination_rate_max"]
-            and overall["safety/base_collision_rate"] <= thresholds["base_collision_rate_max"]
-            and overall["support/invalid_rate"] <= thresholds["support_invalid_rate_max"]
-            and overall["support/wheel_contact_fraction"] >= thresholds["wheel_contact_fraction_min"]
-            and overall["actuation/action_saturation_rate"] <= thresholds["action_saturation_rate_max"]
-            and overall["safety/base_tilt_max_p95_rad"] <= thresholds["base_tilt_max_p95_rad_max"]
+        performance_pass &= all(
+            family.get("episodes", 0) > 0 and passes_thresholds(family)
+            for family in result["terrain_families"].values()
         )
+        performance_pass &= passes_thresholds(overall)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "metadata": metadata,
         "scenarios": scenarios,
         "selection_evidence": {
@@ -171,6 +185,7 @@ def build_validation_report(
             "complete_episodes": complete_episodes,
             "all_finite": all_finite,
             "performance_pass": bool(performance_pass),
+            "protocol_complete": protocol_complete,
             "thresholds": thresholds,
             "rule": (
                 "Performance PASS requires all recorded command and terrain coverage, complete finite episodes, "

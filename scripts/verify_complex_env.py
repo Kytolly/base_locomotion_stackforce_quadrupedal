@@ -15,6 +15,11 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--steps", type=int, default=10)
 parser.add_argument(
+    "--probe-base-contact",
+    action="store_true",
+    help="Drive the inverted base into a flat plane and require collision termination.",
+)
+parser.add_argument(
     "--force-timeout",
     action="store_true",
     help="Shorten the episode to the requested step count and verify training metric logging.",
@@ -69,6 +74,13 @@ def main() -> None:
         env_cfg.episode_length_s = (
             args_cli.steps * float(env_cfg.sim.dt) * int(env_cfg.decimation)
         )
+    if args_cli.probe_base_contact:
+        from isaaclab.terrains import TerrainImporterCfg
+
+        env_cfg.scene.terrain = TerrainImporterCfg(prim_path="/World/ground", terrain_type="plane", collision_group=-1)
+        env_cfg.curriculum.terrain_levels = None
+        env_cfg.terminations.base_height = None
+        env_cfg.terminations.excessive_tilt = None
     print("[VERIFY] stage=create_env", flush=True)
     env = gym.make(args_cli.task, cfg=env_cfg)
     print("[VERIFY] stage=env_created", flush=True)
@@ -77,6 +89,33 @@ def main() -> None:
     try:
         print("[VERIFY] stage=reset", flush=True)
         observations, _ = env.reset()
+        base_force_max = 0.0
+        collision_seen = False
+        if args_cli.probe_base_contact:
+            robot = env.unwrapped.scene["robot"]
+            state = robot.data.default_root_state.clone()
+            state[:, :3] += env.unwrapped.scene.env_origins
+            # Place the inverted base below its nominal support height and give
+            # it a downward velocity.  This makes the probe deterministic: the
+            # old ``default_z + 0.03`` pose could remain entirely above the
+            # plane, producing a false zero-force failure.
+            state[:, 2] = env.unwrapped.scene.env_origins[:, 2] + 0.025
+            state[:, 3:7] = torch.tensor([0.0, 1.0, 0.0, 0.0], device=env.unwrapped.device)
+            state[:, 8] = -1.0
+            robot.write_root_pose_to_sim(state[:, :7])
+            robot.write_root_velocity_to_sim(state[:, 7:])
+            sensor = env.unwrapped.scene["base_contact"]
+            expected = [f"/World/envs/env_{i}/Robot/Geometry/base_link" for i in range(env.unwrapped.num_envs)]
+            actual = sensor.body_physx_view.prim_paths
+            if actual != expected:
+                raise RuntimeError(f"Base contact view binds unexpected prims: {actual}")
+
+            def capture_contact():
+                nonlocal base_force_max
+                force = sensor.data.net_forces_w_history.norm(dim=-1).max().item()
+                base_force_max = max(base_force_max, force)
+
+            env.unwrapped.post_physics_callbacks.append(capture_contact)
         print("[VERIFY] stage=rollout", flush=True)
         if args_cli.task == COMPLEX_TASK:
             expected_sensors = {
@@ -96,6 +135,16 @@ def main() -> None:
         for _ in range(args_cli.steps):
             with torch.inference_mode():
                 observations, rewards, terminated, truncated, extras = env.step(actions)
+                if args_cli.probe_base_contact:
+                    collision_seen |= bool(terminated.any())
+                    force = env.unwrapped.scene["base_contact"].data.net_forces_w_history.norm(
+                        dim=-1
+                    ).max().item()
+                    base_force_max = max(base_force_max, force)
+        if args_cli.probe_base_contact:
+            if not collision_seen or base_force_max <= 8.0:
+                raise RuntimeError(f"Base collision probe failed: force={base_force_max}, terminated={collision_seen}")
+            print(f"[VERIFY] BASE_CONTACT PASS force_max_N={base_force_max:.3f} collision_termination={collision_seen}")
         policy = observations["policy"]
         observation_finite = all(
             bool(torch.isfinite(value).all()) for value in observations.values()

@@ -46,6 +46,9 @@ import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric import (  # noqa: E501
     TrainingMetricsWrapper,
 )
+from base_locomotion_stackforce_quadrupedal.evaluation.metric.logging import (
+    resolve_metric_logging_config,
+)
 
 with contextlib.suppress(ImportError):
     import isaaclab_tasks_experimental  # noqa: F401
@@ -195,7 +198,10 @@ def run(argv: list[str]) -> None:
             args_cli.task.split(":")[-1]
             == "Base-Locomotion-Stackforce-Quadrupedal-Complex-v0"
         ):
-            env = TrainingMetricsWrapper(env)
+            logging_config = resolve_metric_logging_config(
+                getattr(env_cfg, "training_logging", None)
+            )
+            env = TrainingMetricsWrapper(env, logging_config)
         env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
         if agent_cfg.class_name == "OnPolicyRunner":

@@ -1,0 +1,12 @@
+launcher:
+  viz: kit
+  device: cuda:0
+validation:
+  seeds: [1001, 1002, 1003, 1004, 1005]
+  terrain_profiles: [union_consolidation, source_alignment]
+  num_envs: 64
+  episode_steps: 1500
+benchmark:
+  plateau_seeds: [8101, 8102, 8103, 8104, 8105]
+  washboard_seeds: [8201, 8202, 8203, 8204, 8205]
+output_root: output/generalization

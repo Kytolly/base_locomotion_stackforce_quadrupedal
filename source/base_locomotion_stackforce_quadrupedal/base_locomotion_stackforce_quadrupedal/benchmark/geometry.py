@@ -28,7 +28,7 @@ def track_length(parameters: dict[str, Any]) -> float:
     return float(
         parameters["approach_m"]
         + 2.0 * parameters["ramp_length_m"]
-        + (parameters["ridge_count"] - 1) * parameters["ridge_spacing_m"]
+        + parameters["washboard_length_m"]
         + parameters["release_m"]
     )
 
@@ -52,10 +52,8 @@ class TrackTraversal:
             plateau_end = approach + ramp + float(parameters["plateau_length_m"])
             gates = (approach + ramp, plateau_end, plateau_end + ramp)
         else:
-            bed_end = approach + ramp + (int(parameters["ridge_count"]) - 1) * float(
-                parameters["ridge_spacing_m"]
-            )
-            gates = (approach + ramp, bed_end + ramp)
+            bed_end = approach + ramp + float(parameters["washboard_length_m"])
+            gates = (approach + ramp, bed_end, bed_end + ramp)
         self.gates = tuple(gates) + (self.track_length_m,)
         self.gate_index = 0
         self.corridor_violation = False
@@ -107,8 +105,9 @@ def spawn_benchmark_track(
 
     material = UsdShade.Material.Define(stage, f"{root_path}/Material")
     physics_material = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
-    physics_material.CreateStaticFrictionAttr(1.0)
-    physics_material.CreateDynamicFrictionAttr(0.9)
+    friction = parameters.get("friction", {"static_friction": 1.0, "dynamic_friction": 0.9})
+    physics_material.CreateStaticFrictionAttr(friction["static_friction"])
+    physics_material.CreateDynamicFrictionAttr(friction["dynamic_friction"])
     physics_material.CreateRestitutionAttr(0.0)
 
     def bind(prim) -> None:
@@ -130,9 +129,13 @@ def spawn_benchmark_track(
         mesh = UsdGeom.Mesh.Define(stage, f"{root_path}/{name}")
         mesh.CreatePointsAttr([Gf.Vec3f(*point) for point in points])
         mesh.CreateFaceVertexCountsAttr([4] * 6)
-        mesh.CreateFaceVertexIndicesAttr(
-            [0, 2, 3, 1, 4, 5, 7, 6, 0, 4, 6, 2, 1, 3, 7, 5, 0, 1, 5, 4, 2, 6, 7, 3]
-        )
+        faces = [
+            [0, 2, 3, 1], [4, 5, 7, 6], [0, 4, 6, 2],
+            [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3],
+        ]
+        # All collision slabs require outward normals, including the upward top face.
+        faces = [face[::-1] for face in faces]
+        mesh.CreateFaceVertexIndicesAttr([index for face in faces for index in face])
         mesh.CreateSubdivisionSchemeAttr("none")
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
         bind(mesh.GetPrim())
@@ -140,7 +143,8 @@ def spawn_benchmark_track(
     approach = float(parameters["approach_m"])
     ramp_length = float(parameters["ramp_length_m"])
     ramp_height = float(parameters["ramp_height_m"])
-    ramp("Approach", -0.3, approach, 0.0, 0.0)
+    base_z = float(parameters.get("base_surface_height_m", 0.0))
+    ramp("Approach", -0.3, approach, base_z, base_z)
     if kind == "plateau":
         plateau_length = float(parameters["plateau_length_m"])
         release = float(parameters["release_m"])
@@ -167,30 +171,45 @@ def spawn_benchmark_track(
             0.0,
         )
     else:
-        radius = float(parameters["ridge_radius_m"])
-        spacing = float(parameters["ridge_spacing_m"])
-        count = int(parameters["ridge_count"])
-        width = float(parameters["width_m"])
-        ramp("EntryRamp", approach, approach + ramp_length, 0.0, 2.0 * radius)
+        radius = float(parameters["cylinder_radius_m"])
+        spacing = float(parameters["cylinder_spacing_m"])
+        count = int(parameters["cylinders_per_row"])
+        length = float(parameters["cylinder_length_m"])
+        ramp("EntryRamp", approach, approach + ramp_length, base_z, base_z + 2.0 * radius)
         bed_start = approach + ramp_length
-        for index in range(count):
-            ridge = UsdGeom.Cylinder.Define(stage, f"{root_path}/Ridge_{index:02d}")
-            ridge.CreateAxisAttr(UsdGeom.Tokens.x)
-            ridge.CreateRadiusAttr(radius)
-            ridge.CreateHeightAttr(width)
-            ridge.AddTranslateOp().Set(
-                Gf.Vec3d(0.0, bed_start + index * spacing, radius)
-            )
-            UsdPhysics.CollisionAPI.Apply(ridge.GetPrim())
-            bind(ridge.GetPrim())
-        bed_end = bed_start + (count - 1) * spacing
-        ramp("ExitRamp", bed_end, bed_end + ramp_length, 2.0 * radius, 0.0)
+        staggers = parameters["row_stagger_offsets_m"]
+        leading_row = staggers.index(min(staggers))
+        for row in range(2):
+            for index in range(count):
+                dx, dy = parameters["cylinder_position_offsets_xy_m"][row][index]
+                x = parameters["lateral_row_centers_m"][row] + dx
+                y = bed_start + index * spacing + staggers[row] + dy
+                z = base_z + parameters["cylinder_height_offsets_m"][row][index] + radius
+                entry = row == leading_row and index == 0
+                exit_edge = row != leading_row and index == count - 1
+                if entry or exit_edge:
+                    ridge = UsdGeom.Cube.Define(stage, f"{root_path}/BoundaryBox_Row_{row}_{index:02d}")
+                    ridge.CreateSizeAttr(2.0)
+                    ridge.AddTranslateOp().Set(Gf.Vec3d(x, y + (0.5 * radius if entry else -0.5 * radius), z))
+                    ridge.AddScaleOp().Set(Gf.Vec3f(length / 2.0, radius / 2.0, radius))
+                else:
+                    ridge = UsdGeom.Cylinder.Define(stage, f"{root_path}/Cylinder_Row_{row}_{index:02d}")
+                    ridge.CreateAxisAttr(UsdGeom.Tokens.x)
+                    ridge.CreateRadiusAttr(radius)
+                    ridge.CreateHeightAttr(length)
+                    ridge.AddTranslateOp().Set(Gf.Vec3d(x, y, z))
+                    ridge.AddRotateZOp().Set(parameters["cylinder_orientation_offsets_deg"][row][index])
+                ridge.CreateDisplayColorAttr([Gf.Vec3f(0.42, 0.66, 0.70)])
+                UsdPhysics.CollisionAPI.Apply(ridge.GetPrim())
+                bind(ridge.GetPrim())
+        bed_end = bed_start + float(parameters["washboard_length_m"])
+        ramp("ExitRamp", bed_end, bed_end + ramp_length, base_z + 2.0 * radius, base_z)
         ramp(
             "Release",
             bed_end + ramp_length,
             bed_end + ramp_length + float(parameters["release_m"]),
-            0.0,
-            0.0,
+            base_z,
+            base_z,
         )
 
     env.benchmark_track_parameters = parameters

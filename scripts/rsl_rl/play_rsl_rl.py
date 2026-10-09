@@ -158,7 +158,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         if agent_cfg.class_name == "OnPolicyRunner":
-            runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+            from pathlib import Path
+            from base_locomotion_stackforce_quadrupedal.training.checkpoint import checkpoint_runner_config
+
+            runner = OnPolicyRunner(env, checkpoint_runner_config(Path(resume_path), agent_cfg.to_dict()), log_dir=None, device=agent_cfg.device)
         elif agent_cfg.class_name == "DistillationRunner":
             runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
         else:

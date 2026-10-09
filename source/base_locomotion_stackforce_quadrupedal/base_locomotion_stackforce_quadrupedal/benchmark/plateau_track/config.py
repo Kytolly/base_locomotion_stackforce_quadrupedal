@@ -23,7 +23,7 @@ def plateau_track_parameters(
     ramp_length = value(1.5, 0.25)
     return {
         "kind": "plateau",
-        "version": 1,
+        "version": 2,
         "seed": seed,
         "randomized": randomized,
         "width_m": value(2.0, 0.25),

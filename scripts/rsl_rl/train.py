@@ -4,27 +4,86 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 from datetime import datetime
 import importlib.metadata as metadata
+import importlib.util
 import os
 from pathlib import Path
 import shutil
+import sys
 import time
+import traceback
 
-from omegaconf import OmegaConf
+# Keep source checkouts usable with IsaacLab's launcher even when the extension
+# packages have not been installed into the selected Python environment yet.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ISAACLAB_ROOT = Path(os.environ.get("ISAACLAB_PATH", "/home/kytolly/Library/IsaacLab"))
+_VENV_ROOT = Path(os.environ.get("VIRTUAL_ENV", sys.prefix))
+_CUDA_LIB_DIRS = [
+    path
+    for path in (_VENV_ROOT / "lib/python3.12/site-packages/nvidia").glob("*/lib")
+    if path.is_dir()
+]
+for _library_name in ("libnvrtc-builtins.so.13.0", "libnvrtc.so.13"):
+    for _library_dir in _CUDA_LIB_DIRS:
+        _library_path = _library_dir / _library_name
+        if _library_path.is_file():
+            try:
+                ctypes.CDLL(str(_library_path), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+            break
+if _CUDA_LIB_DIRS:
+    _existing_library_path = os.environ.get("LD_LIBRARY_PATH", "").split(":")
+    _library_paths = [str(path) for path in _CUDA_LIB_DIRS]
+    os.environ["LD_LIBRARY_PATH"] = ":".join(
+        dict.fromkeys(_library_paths + [path for path in _existing_library_path if path])
+    )
+for _source in (_PROJECT_ROOT / "source/base_locomotion_stackforce_quadrupedal", *_ISAACLAB_ROOT.glob("source/*")):
+    if _source.is_dir() and str(_source) not in sys.path:
+        sys.path.insert(0, str(_source))
+
+try:
+    from omegaconf import OmegaConf
+except ModuleNotFoundError as exc:  # pragma: no cover - depends on the Isaac Lab runtime
+    if exc.name == "omegaconf":
+        raise RuntimeError(
+            "OmegaConf is missing from the active Isaac Lab Python environment. "
+            "Install this project with `pip install -e .` (or `pip install omegaconf>=2.3.0`) "
+            "and rerun through IsaacLab/isaaclab.sh -p."
+        ) from exc
+    raise
 
 from isaaclab.app import AppLauncher
 
-from base_locomotion_stackforce_quadrupedal.training import (
-    apply_config,
-    launcher_kwargs,
-    load_config,
-    validate_training_config,
-)
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = _PROJECT_ROOT
 DEFAULT_CONFIG = PROJECT_ROOT / "configs/train/base_locomotion_complex.yaml"
+ISAACLAB_PYTHON = Path("/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python")
+
+
+def _load_yaml_config(path: Path, overrides: list[str]):
+    """Load the launcher contract before importing task modules into Kit."""
+    config = OmegaConf.load(path.expanduser().resolve())
+    if overrides:
+        config = OmegaConf.merge(config, OmegaConf.from_dotlist(overrides))
+    OmegaConf.resolve(config)
+    return config
+
+
+def _launcher_kwargs(config) -> dict[str, object]:
+    viz = str(config.launcher.viz)
+    visualizers = None if viz == "none" else viz.split(",")
+    return {
+        "device": str(config.launcher.device),
+        "visualizer": visualizers,
+        "visualizer_explicit": True,
+        "visualizer_disable_all": viz == "none",
+        "headless": viz == "none",
+        "enable_cameras": bool(config.launcher.get("enable_cameras", False)),
+        "max_visible_envs": int(config.launcher.get("max_visible_envs", 16)),
+    }
 
 
 def _parse_args() -> argparse.Namespace:
@@ -85,17 +144,52 @@ def _make_log_dir(config) -> Path:
     ).resolve()
 
 
+def _require_isaac_sim_runtime() -> None:
+    """Fail before AppLauncher when the active Python cannot bootstrap Isaac Sim."""
+    exp_path = os.environ.get("EXP_PATH")
+    if exp_path and Path(exp_path).is_dir():
+        return
+    raise RuntimeError(
+        "Isaac Sim runtime is not initialized for "
+        f"{sys.executable}. Run this script with {ISAACLAB_PYTHON}, or activate "
+        "the env_isaaclab Conda environment before invoking isaaclab.sh."
+    )
+
+
 def main() -> None:
     args = _parse_args()
-    config = load_config(args.config, args.overrides)
-    validate_training_config(config)
+    config = _load_yaml_config(args.config, args.overrides)
     if args.validate_config:
+        # The YAML contract can be checked without importing the task package;
+        # importing it would initialize every Isaac Lab task and require Kit.
+        config_module_path = PROJECT_ROOT / (
+            "source/base_locomotion_stackforce_quadrupedal/"
+            "base_locomotion_stackforce_quadrupedal/training/config.py"
+        )
+        config_spec = importlib.util.spec_from_file_location("_training_config", config_module_path)
+        if config_spec is None or config_spec.loader is None:
+            raise RuntimeError(f"Unable to load training config helpers from {config_module_path}.")
+        config_module = importlib.util.module_from_spec(config_spec)
+        config_spec.loader.exec_module(config_module)
+        validate_training_config = config_module.validate_training_config
+
+        validate_training_config(config)
         print(OmegaConf.to_yaml(config, resolve=True))
         return
 
     resolved = OmegaConf.to_container(config, resolve=True)
-    app_launcher = AppLauncher(launcher_kwargs(config))
+    _require_isaac_sim_runtime()
+    app_launcher = AppLauncher(_launcher_kwargs(config))
     simulation_app = app_launcher.app
+
+    # Importing the project package before AppLauncher starts Kit can leave
+    # SensorBaseCfg classes split across pre-Kit and Kit module instances.
+    from base_locomotion_stackforce_quadrupedal.training import (
+        apply_config,
+        validate_training_config,
+    )
+
+    validate_training_config(config)
 
     import gymnasium as gym
     import torch
@@ -114,6 +208,15 @@ def main() -> None:
     from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric import (
         TrainingMetricsWrapper,
     )
+    from base_locomotion_stackforce_quadrupedal.evaluation.metric.logging import (
+        resolve_metric_logging_config,
+    )
+    from base_locomotion_stackforce_quadrupedal.training.checkpoint import (
+        build_training_contract,
+        checkpoint_runner_config,
+        require_compatible_training_contract,
+        save_training_contract,
+    )
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -130,6 +233,28 @@ def main() -> None:
     env_cfg.decimation = int(config.env.decimation)
     env_cfg.sim.render_interval = int(config.env.render_interval)
     env_cfg.episode_length_s = float(config.env.episode_length_s)
+    if config.env.get("terrain_profile"):
+        from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import (
+            get_complex_terrain_cfg,
+        )
+
+        env_cfg.terrain_profile = str(config.env.terrain_profile)
+        env_cfg.scene.terrain.terrain_generator = get_complex_terrain_cfg(
+            seed=int(config.env.seed), profile=env_cfg.terrain_profile
+        )
+    if config.get("curriculum"):
+        apply_config(env_cfg.curriculum, config.curriculum, "curriculum")
+        if terrain_generator := getattr(env_cfg.scene.terrain, "terrain_generator", None):
+            terrain_generator.curriculum = env_cfg.curriculum.terrain_levels is not None
+    physics_values = config.env.get("physics", {})
+    if physics_values:
+        physics_cfg = getattr(env_cfg.sim, "physics", None)
+        if physics_cfg is None:
+            raise ValueError("env.physics overrides require a PhysX simulation backend.")
+        for field_name, field_value in physics_values.items():
+            if not hasattr(physics_cfg, field_name):
+                raise KeyError(f"Unknown environment physics field: env.physics.{field_name}")
+            setattr(physics_cfg, field_name, int(field_value))
     terrain_generator = getattr(env_cfg.scene.terrain, "terrain_generator", None)
     if terrain_generator is not None:
         terrain_generator.seed = int(config.env.seed)
@@ -149,12 +274,16 @@ def main() -> None:
     shutil.copy2(args.config.resolve(), log_dir / "source_training_config.yaml")
     dump_yaml(str(log_dir / "env.yaml"), env_cfg)
     dump_yaml(str(log_dir / "agent.yaml"), agent_cfg)
+    training_contract = build_training_contract(task, env_cfg, agent_cfg)
+    save_training_contract(log_dir, training_contract)
     _configure_wandb(config, resolved)
 
     render_mode = "rgb_array" if bool(config.video.enabled) else None
     env = None
     try:
+        print(f"[TRAIN] creating_env task={task}", flush=True)
         env = gym.make(task, cfg=env_cfg, render_mode=render_mode)
+        print("[TRAIN] environment_created", flush=True)
         if bool(config.video.enabled):
             env = gym.wrappers.RecordVideo(
                 env,
@@ -163,8 +292,10 @@ def main() -> None:
                 video_length=int(config.video.length),
                 disable_logger=True,
             )
-        env = TrainingMetricsWrapper(env)
+        logging_config = resolve_metric_logging_config(config.get("logging", {}))
+        env = TrainingMetricsWrapper(env, logging_config)
         vec_env = RslRlVecEnvWrapper(env, clip_actions=float(agent_cfg.clip_actions))
+        print(f"[TRAIN] observation_space={vec_env.observation_space} action_space={vec_env.action_space}", flush=True)
         runner = OnPolicyRunner(
             vec_env,
             agent_cfg.to_dict(),
@@ -177,6 +308,16 @@ def main() -> None:
                 str(log_dir.parent), agent_cfg.load_run, agent_cfg.load_checkpoint
             )
             print(f"[TRAIN] resuming checkpoint={checkpoint}")
+            require_compatible_training_contract(
+                Path(checkpoint),
+                training_contract,
+                allow_terrain_mix_transition=bool(
+                    config.runtime.get("allow_terrain_stage_resume", False)
+                ),
+            )
+            saved_cfg = checkpoint_runner_config(Path(checkpoint), agent_cfg.to_dict())
+            if saved_cfg["actor"]["distribution_cfg"] != agent_cfg.to_dict()["actor"]["distribution_cfg"]:
+                raise ValueError("Resume cannot change the action distribution. Start a new run with agent.resume=false.")
             runner.load(checkpoint)
 
         print(f"[TRAIN] config={args.config.resolve()}")
@@ -188,6 +329,9 @@ def main() -> None:
             init_at_random_ep_len=bool(config.runtime.init_at_random_episode_length),
         )
         print(f"[TRAIN] completed_seconds={time.time() - started:.2f}")
+    except BaseException:
+        traceback.print_exc()
+        raise
     finally:
         if env is not None:
             env.close()

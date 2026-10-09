@@ -9,24 +9,24 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
 
 
 def _scenario_metrics() -> dict[str, torch.Tensor]:
-    terrain_type = torch.arange(8, dtype=torch.float32)
+    terrain_type = torch.arange(9, dtype=torch.float32)
     return {
         "terrain/type_id": terrain_type,
-        "locomotion/forward_velocity_rmse_mps": torch.arange(1, 9, dtype=torch.float32),
-        "locomotion/lateral_velocity_rmse_mps": torch.full((8,), 0.05),
-        "locomotion/yaw_rate_rmse_radps": torch.full((8,), 0.2),
-        "locomotion/body_height_rmse_m": torch.full((8,), 0.01),
-        "safety/unsafe_termination": torch.zeros(8),
-        "safety/timeout": torch.ones(8),
-        "safety/base_collision_rate": torch.zeros(8),
-        "support/invalid_rate": torch.zeros(8),
-        "support/wheel_contact_fraction": torch.full((8,), 0.75),
-        "safety/base_tilt_max_rad": torch.linspace(0.1, 0.8, 8),
-        "actuation/action_saturation_rate": torch.zeros(8),
-        "actuation/leg_mechanical_energy_j": torch.ones(8),
-        "actuation/wheel_mechanical_energy_j": torch.full((8,), 2.0),
-        "runtime/episode_complete": torch.ones(8),
-        "runtime/all_finite": torch.ones(8),
+        "locomotion/forward_velocity_rmse_mps": torch.arange(1, 10, dtype=torch.float32),
+        "locomotion/lateral_velocity_rmse_mps": torch.full((9,), 0.05),
+        "locomotion/yaw_rate_rmse_radps": torch.full((9,), 0.2),
+        "locomotion/body_height_rmse_m": torch.full((9,), 0.01),
+        "safety/unsafe_termination": torch.zeros(9),
+        "safety/timeout": torch.ones(9),
+        "safety/base_collision_rate": torch.zeros(9),
+        "support/invalid_rate": torch.zeros(9),
+        "support/wheel_contact_fraction": torch.full((9,), 0.75),
+        "safety/base_tilt_max_rad": torch.linspace(0.1, 0.9, 9),
+        "actuation/action_saturation_rate": torch.zeros(9),
+        "actuation/leg_mechanical_energy_j": torch.ones(9),
+        "actuation/wheel_mechanical_energy_j": torch.full((9,), 2.0),
+        "runtime/episode_complete": torch.ones(9),
+        "runtime/all_finite": torch.ones(9),
     }
 
 
@@ -40,8 +40,8 @@ def test_complete_suite_is_eligible_and_reports_macro_worst() -> None:
     assert report["selection_evidence"]["eligible_for_checkpoint_comparison"]
     assert not report["selection_evidence"]["performance_pass"]
     forward = report["scenarios"]["forward"]["terrain_aggregate"]
-    assert forward["macro/locomotion/forward_velocity_rmse_mps"] == 4.5
-    assert forward["worst/locomotion/forward_velocity_rmse_mps"] == 8.0
+    assert forward["macro/locomotion/forward_velocity_rmse_mps"] == 5.0
+    assert forward["worst/locomotion/forward_velocity_rmse_mps"] == 9.0
     assert forward["worst/safety/timeout_survival_rate"] == 1.0
 
 
@@ -50,7 +50,7 @@ def test_missing_terrain_family_blocks_checkpoint_comparison() -> None:
         scenario.name: _scenario_metrics() for scenario in DEFAULT_VALIDATION_SCENARIOS
     }
     for values in metrics.values():
-        mask = values["terrain/type_id"] != 7
+        mask = values["terrain/type_id"] != 8
         for name in values:
             values[name] = values[name][mask]
 
@@ -58,6 +58,21 @@ def test_missing_terrain_family_blocks_checkpoint_comparison() -> None:
 
     assert not report["selection_evidence"]["eligible_for_checkpoint_comparison"]
     assert report["scenarios"]["forward"]["terrain_coverage"]["missing"] == ["pit"]
+
+
+def test_source_alignment_requires_only_its_six_declared_families() -> None:
+    metrics = {
+        scenario.name: _scenario_metrics() for scenario in DEFAULT_VALIDATION_SCENARIOS
+    }
+    for values in metrics.values():
+        mask = values["terrain/type_id"] < 6
+        for name in values:
+            values[name] = values[name][mask]
+    report = build_validation_report(
+        metrics, {"ppo_updates": 0, "terrain_profile": "source_alignment"}
+    )
+    assert report["selection_evidence"]["eligible_for_checkpoint_comparison"]
+    assert report["scenarios"]["forward"]["terrain_coverage"]["missing"] == []
 
 
 def test_incomplete_episode_blocks_checkpoint_comparison() -> None:
@@ -78,9 +93,26 @@ def test_fixed_thresholds_can_only_pass_a_qualified_run() -> None:
         scenario.name: _scenario_metrics() for scenario in DEFAULT_VALIDATION_SCENARIOS
     }
     for values in metrics.values():
-        values["locomotion/forward_velocity_rmse_mps"] = torch.full((8,), 0.05)
-        values["locomotion/yaw_rate_rmse_radps"] = torch.full((8,), 0.05)
+        values["locomotion/forward_velocity_rmse_mps"] = torch.full((9,), 0.05)
+        values["locomotion/yaw_rate_rmse_radps"] = torch.full((9,), 0.05)
 
-    report = build_validation_report(metrics, {"ppo_updates": 10000})
+    report = build_validation_report(metrics, {
+        "ppo_updates": 0, "policy": "checkpoint", "curriculum_frozen": True,
+        "terrain_level": -1, "num_envs": 64, "episode_steps": 1500, "policy_dt_s": 0.02,
+    })
 
     assert report["selection_evidence"]["performance_pass"]
+
+
+def test_good_overall_average_cannot_hide_a_failing_family() -> None:
+    metrics = {scenario.name: _scenario_metrics() for scenario in DEFAULT_VALIDATION_SCENARIOS}
+    for values in metrics.values():
+        values["locomotion/forward_velocity_rmse_mps"] = torch.full((9,), 0.05)
+        values["locomotion/yaw_rate_rmse_radps"] = torch.full((9,), 0.05)
+    metrics["forward"]["actuation/action_saturation_rate"][0] = 0.30
+    report = build_validation_report(metrics, {
+        "policy": "checkpoint", "curriculum_frozen": True, "terrain_level": -1,
+        "num_envs": 64, "episode_steps": 1500, "policy_dt_s": 0.02,
+    })
+    assert report["scenarios"]["forward"]["overall"]["actuation/action_saturation_rate"] < 0.05
+    assert not report["selection_evidence"]["performance_pass"]

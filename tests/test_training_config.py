@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from base_locomotion_stackforce_quadrupedal.training import (
     launcher_kwargs,
     load_config,
@@ -13,14 +15,15 @@ from base_locomotion_stackforce_quadrupedal.training import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_training_yaml_defaults_to_kit_and_wandb() -> None:
+def test_training_yaml_defaults_to_headless_and_wandb() -> None:
     config = load_config(PROJECT_ROOT / "configs/train/base_locomotion_complex.yaml")
 
     validate_training_config(config)
 
-    assert config.launcher.viz == "kit"
+    assert config.launcher.viz == "none"
     assert config.wandb.enabled
-    assert launcher_kwargs(config)["visualizer"] == ["kit"]
+    assert launcher_kwargs(config)["visualizer"] is None
+    assert launcher_kwargs(config)["headless"] is True
 
 
 def test_training_dotlist_override_is_resolved() -> None:
@@ -34,6 +37,34 @@ def test_training_dotlist_override_is_resolved() -> None:
     assert config.agent.max_iterations == 3
     assert launcher_kwargs(config)["headless"]
     assert config.wandb.mode == "offline"
+
+
+def test_resume_requires_exact_run_and_checkpoint() -> None:
+    config_path = PROJECT_ROOT / "configs/train/base_locomotion_complex.yaml"
+    missing = load_config(config_path, ("agent.resume=true",))
+    with pytest.raises(ValueError, match="requires exact"):
+        validate_training_config(missing)
+
+    wildcard = load_config(
+        config_path,
+        (
+            "agent.resume=true",
+            "agent.load_run=.*",
+            "agent.load_checkpoint=model_.*.pt",
+        ),
+    )
+    with pytest.raises(ValueError, match="exact names"):
+        validate_training_config(wildcard)
+
+    exact = load_config(
+        config_path,
+        (
+            "agent.resume=true",
+            "agent.load_run=2026-09-30_13-29-44_directional_curriculum_v6_gate1k",
+            "agent.load_checkpoint=model_999.pt",
+        ),
+    )
+    validate_training_config(exact)
 
 
 def test_benchmark_yaml_contracts() -> None:

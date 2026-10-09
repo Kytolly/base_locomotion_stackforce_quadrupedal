@@ -9,18 +9,48 @@ from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPp
 
 
 @configclass
+class BoundedDistributionCfg:
+    class_name: str = "base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution"
+    init_std: float = 0.3
+    std_type: str = "log"
+    min_std: float = 0.05
+    max_std: float = 0.5
+
+
+@configclass
+class SparseExpertModelCfg(RslRlMLPModelCfg):
+    class_name: str = "base_locomotion_stackforce_quadrupedal.training.sparse_expert:SparseExpertModel"
+    architecture: str = "mlp"
+    num_experts: int = 6
+    top_k: int = 2
+    expert_hidden_dims: list[int] = [128, 128]
+    gate_hidden_dims: list[int] = [64, 64]
+    reflex_enabled: bool = False
+    reflex_hidden_dims: list[int] = [64]
+    reflex_scale: float = 0.25
+
+
+@configclass
+class SparseExpertPPOCfg(RslRlPpoAlgorithmCfg):
+    class_name: str = "base_locomotion_stackforce_quadrupedal.training.sparse_expert:SparseExpertPPO"
+    gate_entropy_coef: float = 0.0
+    expert_orthogonality_coef: float = 0.0
+    temporal_consistency_coef: float = 0.0
+
+
+@configclass
 class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 16
     max_iterations = 150
     save_interval = 50
     experiment_name = "cartpole_direct"
-    actor = RslRlMLPModelCfg(
+    actor = SparseExpertModelCfg(
         hidden_dims=[32, 32],
         activation="elu",
         obs_normalization=False,
         distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
     )
-    critic = RslRlMLPModelCfg(
+    critic = SparseExpertModelCfg(
         hidden_dims=[32, 32],
         activation="elu",
         obs_normalization=False,
@@ -54,14 +84,28 @@ class ComplexPPORunnerCfg(PPORunnerCfg):
         "actor": ["policy"],
         "critic": ["policy", "privileged"],
     }
-    actor = RslRlMLPModelCfg(
+    actor = SparseExpertModelCfg(
         hidden_dims=[128, 128],
         activation="elu",
         obs_normalization=False,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
+        distribution_cfg=BoundedDistributionCfg(),
     )
-    critic = RslRlMLPModelCfg(
+    critic = SparseExpertModelCfg(
         hidden_dims=[128, 128],
         activation="elu",
         obs_normalization=False,
+    )
+    algorithm = SparseExpertPPOCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.001,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=1.0e-3,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
     )

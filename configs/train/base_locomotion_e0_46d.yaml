@@ -1,0 +1,123 @@
+schema_version: 2
+protocol_version: E0-v1-46d
+actor_observation_dim: 46
+task: Base-Locomotion-Stackforce-Quadrupedal-Complex-v0
+
+launcher:
+  device: cuda:0
+  viz: none
+  enable_cameras: false
+  max_visible_envs: 16
+  use_fabric: true
+
+env:
+  num_envs: 4096
+  seed: 42
+  terrain_profile: union_expansion
+  sim_dt: 0.005
+  decimation: 4
+  render_interval: 4
+  episode_length_s: 30.0
+  physics:
+    gpu_found_lost_aggregate_pairs_capacity: 67108864
+
+curriculum:
+  terrain_levels:
+    params:
+      tracking_rmse_range: [0.30, 0.18]
+      yaw_rmse_range: [0.35, 0.20]
+      progress_ratio_range: [0.60, 0.80]
+      demotion_progress_ratio: 0.25
+  motion_family:
+    params:
+      success_tracking_rmse: 0.30
+      success_yaw_rmse: 0.35
+      sampling_floor: 0.05
+  robustness_bin:
+    params:
+      nominal_level: 0
+      moderate_level: 2
+      stress_level: 5
+
+agent:
+  num_steps_per_env: 24
+  max_iterations: 20000
+  save_interval: 250
+  experiment_name: base_locomotion_e0_46d
+  run_name: e0_46d_seed42
+  clip_actions: 1.0
+  resume: false
+  load_run: null
+  load_checkpoint: null
+  actor:
+    hidden_dims: [128, 128]
+    activation: elu
+    obs_normalization: false
+    distribution_cfg:
+      class_name: base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution
+      init_std: 0.3
+      std_type: log
+      min_std: 0.05
+      max_std: 0.5
+  critic:
+    hidden_dims: [128, 128]
+    activation: elu
+    obs_normalization: false
+  algorithm:
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    learning_rate: 0.001
+    schedule: adaptive
+    gamma: 0.99
+    lam: 0.95
+    entropy_coef: 0.001
+    desired_kl: 0.01
+    max_grad_norm: 1.0
+    value_loss_coef: 1.0
+    use_clipped_value_loss: true
+    clip_param: 0.2
+
+wandb:
+  enabled: true
+  project: stackforce-quadrupedal-locomotion
+  entity: null
+  mode: online
+  group: e0-46d
+  run_name: ${agent.run_name}
+  tags: [stackforce, quadrupedal, wheel-leg, e0, 46d]
+
+video:
+  enabled: false
+  interval: 2000
+  length: 200
+
+runtime:
+  log_root: logs/rsl_rl
+  init_at_random_episode_length: true
+  allow_terrain_stage_resume: false
+
+logging:
+  metrics:
+    enabled: true #
+    groups:
+      core: true #
+      safety: true #
+      runtime: true #
+      command: true
+      support: true
+      actuation: true
+      terrain: true
+      motion: true
+      reward: true
+  wandb_panels:
+    enabled: true
+    groups:
+      core: true
+      safety: true
+      runtime: true
+      command: true
+      support: true
+      actuation: true
+      terrain: true
+      motion: true
+      reward: true

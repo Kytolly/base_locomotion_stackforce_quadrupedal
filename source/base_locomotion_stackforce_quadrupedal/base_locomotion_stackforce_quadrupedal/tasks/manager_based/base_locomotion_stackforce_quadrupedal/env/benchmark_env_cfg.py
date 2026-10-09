@@ -58,6 +58,10 @@ class PlateauBenchmarkEnvCfg(BaseLocomotionComplexEnvCfg):
         for sensor_name in ("contact_fr", "contact_fl", "contact_rl", "contact_rr", "base_contact"):
             getattr(self.scene, sensor_name).update_period = self.sim.dt
         self.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
+        self.commands.locomotion.ranges.forward_velocity_mps = (0.28, 0.28)
+        self.commands.locomotion.ranges.lateral_velocity_mps = (0.0, 0.0)
+        self.commands.locomotion.ranges.yaw_rate_radps = (0.0, 0.0)
+        self.commands.locomotion.ranges.body_height_m = (0.105, 0.105)
         self.viewer.eye = (4.5, -3.0, 2.8)
         self.viewer.lookat = (0.0, 2.0, 0.25)
 

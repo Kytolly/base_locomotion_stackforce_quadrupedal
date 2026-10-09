@@ -3,11 +3,44 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.metadata as metadata
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
+
+
+# Keep direct-Python validation consistent with the training launcher.  In
+# particular, Isaac Sim may otherwise resolve a bundled CUDA/NVRTC library
+# before the active IsaacLab environment has installed its compatible one.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ISAACLAB_ROOT = Path(os.environ.get("ISAACLAB_PATH", "/home/kytolly/Library/IsaacLab"))
+VENV_ROOT = Path(os.environ.get("VIRTUAL_ENV", sys.prefix))
+CUDA_LIB_DIRS = [
+    path
+    for path in (VENV_ROOT / "lib/python3.12/site-packages/nvidia").glob("*/lib")
+    if path.is_dir()
+]
+for library_name in ("libnvrtc-builtins.so.13.0", "libnvrtc.so.13"):
+    for library_dir in CUDA_LIB_DIRS:
+        library_path = library_dir / library_name
+        if library_path.is_file():
+            try:
+                ctypes.CDLL(str(library_path), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+            break
+if CUDA_LIB_DIRS:
+    existing_library_path = os.environ.get("LD_LIBRARY_PATH", "").split(":")
+    os.environ["LD_LIBRARY_PATH"] = ":".join(
+        dict.fromkeys([str(path) for path in CUDA_LIB_DIRS] + [path for path in existing_library_path if path])
+    )
+for source in (PROJECT_ROOT / "source/base_locomotion_stackforce_quadrupedal", *ISAACLAB_ROOT.glob("source/*")):
+    if source.is_dir() and str(source) not in sys.path:
+        sys.path.insert(0, str(source))
 
 from isaaclab.app import AppLauncher
 
@@ -20,9 +53,17 @@ policy_group = parser.add_mutually_exclusive_group(required=True)
 policy_group.add_argument("--checkpoint", type=Path)
 policy_group.add_argument("--zero-policy", action="store_true")
 parser.add_argument("--num-envs", type=int, default=64)
-parser.add_argument("--episode-steps", type=int, default=500)
+parser.add_argument("--episode-steps", type=int, default=1500)
+parser.add_argument("--terrain-level", type=int, default=-1, help="Fixed level, or -1 for balanced levels 0..7.")
+parser.add_argument("--terrain-profile", default="union_consolidation")
 parser.add_argument("--seed", type=int, default=1001)
 parser.add_argument("--output", type=Path, default=None)
+parser.add_argument("--wandb", action="store_true", help="Upload validation metrics to Weights & Biases.")
+parser.add_argument("--wandb-project", default="stackforce-quadrupedal-locomotion")
+parser.add_argument("--wandb-entity", default=None)
+parser.add_argument("--wandb-group", default="checkpoint-validation")
+parser.add_argument("--wandb-run-name", default=None)
+parser.add_argument("--wandb-mode", choices=("online", "offline"), default="online")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -72,6 +113,52 @@ def _git_commit() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _wandb_scalars(report: dict) -> dict[str, float | int | bool]:
+    """Flatten numeric validation evidence for a compact W&B checkpoint record."""
+    values: dict[str, float | int | bool] = {}
+    selection = report.get("selection_evidence", {})
+    for name, value in selection.items():
+        if isinstance(value, (bool, int, float)):
+            values[f"validation/{name}"] = value
+    for scenario_name, scenario in report.get("scenarios", {}).items():
+        overall = scenario.get("overall", {})
+        for metric_name, value in overall.items():
+            if isinstance(value, (int, float)):
+                values[f"validation/{scenario_name}/{metric_name}"] = value
+        aggregate = scenario.get("terrain_aggregate", {})
+        for metric_name, value in aggregate.items():
+            if isinstance(value, (int, float)):
+                values[f"validation/{scenario_name}/{metric_name}"] = value
+    return values
+
+
+def _upload_wandb(report: dict, checkpoint: Path | None, report_path: Path) -> None:
+    """Upload one immutable checkpoint validation result when explicitly enabled."""
+    if not args_cli.wandb:
+        return
+    import wandb
+
+    run_name = args_cli.wandb_run_name
+    if not run_name:
+        stem = checkpoint.stem if checkpoint is not None else "zero_policy"
+        run_name = f"validation_{stem}_seed{args_cli.seed}"
+    run = wandb.init(
+        project=args_cli.wandb_project,
+        entity=args_cli.wandb_entity,
+        group=args_cli.wandb_group,
+        name=run_name,
+        job_type="checkpoint-validation",
+        mode=args_cli.wandb_mode,
+        config=report.get("metadata", {}),
+    )
+    run.log(_wandb_scalars(report))
+    run.summary["validation/performance_pass"] = bool(
+        report.get("selection_evidence", {}).get("performance_pass", False)
+    )
+    run.summary["validation/report_path"] = str(report_path)
+    run.finish()
+
+
 def _base_height_flags(env) -> torch.Tensor:
     manager = env.termination_manager
     flags = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -81,6 +168,13 @@ def _base_height_flags(env) -> torch.Tensor:
 
 
 def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
+    torch.manual_seed(args_cli.seed)
+    terrain = env.scene.terrain
+    levels = torch.arange(env.num_envs, device=env.device) % terrain.max_terrain_level
+    if args_cli.terrain_level >= 0:
+        levels.fill_(args_cli.terrain_level)
+    terrain.terrain_levels[:] = levels
+    terrain.env_origins[:] = terrain.terrain_origins[levels, terrain.terrain_types]
     vec_env.reset()
     if policy is not None:
         policy.reset(torch.ones(env.num_envs, dtype=torch.long, device=env.device))
@@ -91,6 +185,12 @@ def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
     active = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
     chunks: dict[str, list[torch.Tensor]] = {}
 
+    def capture_step():
+        accumulator.observe_state(env.action_manager.action)
+        accumulator.observe_reward(env.reward_buf)
+
+    env.post_physics_callbacks = [capture_step]
+
     for _ in range(args_cli.episode_steps + 1):
         command_term.set_command(command)
         observations = vec_env.get_observations()
@@ -100,9 +200,7 @@ def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
                 if policy is None
                 else policy(observations)
             )
-        accumulator.observe_state(actions)
         _, reward, dones, _ = vec_env.step(actions)
-        accumulator.observe_reward(reward)
         terminated = env.reset_terminated.clone()
         truncated = env.reset_time_outs.clone()
         completed = active & dones.bool()
@@ -136,6 +234,7 @@ def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
             chunks.setdefault(name, []).append(values.detach().cpu())
 
     metrics = {name: torch.cat(values) for name, values in chunks.items()}
+    env.post_physics_callbacks = []
     return metrics
 
 
@@ -154,12 +253,28 @@ def main() -> None:
     )
     env_cfg.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
     env_cfg.__post_init__()
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import (
+        get_complex_terrain_cfg,
+    )
+
+    env_cfg.terrain_profile = args_cli.terrain_profile
+    env_cfg.scene.terrain.terrain_generator = get_complex_terrain_cfg(
+        seed=args_cli.seed, profile=args_cli.terrain_profile
+    )
+    env_cfg.curriculum.terrain_levels = None
+    env_cfg.events.reset_root.params["slope_approach_fraction"] = 0.0
+    # Keep the selected deterministic family layout, freeze only updates.
+    env_cfg.scene.terrain.terrain_generator.curriculum = True
+    if not -1 <= args_cli.terrain_level < env_cfg.scene.terrain.terrain_generator.num_rows:
+        raise ValueError("terrain-level must be -1 or a valid terrain row.")
     env_cfg.episode_length_s = (
         args_cli.episode_steps * float(env_cfg.sim.dt) * int(env_cfg.decimation)
     )
 
+    print(f"[VALIDATION] creating task={args_cli.task} seed={args_cli.seed} envs={args_cli.num_envs}", flush=True)
     base_env = gym.make(args_cli.task, cfg=env_cfg)
     vec_env = RslRlVecEnvWrapper(base_env, clip_actions=1.0)
+    print("[VALIDATION] environment ready", flush=True)
     checkpoint = (
         args_cli.checkpoint.resolve() if args_cli.checkpoint is not None else None
     )
@@ -172,13 +287,17 @@ def main() -> None:
             agent_cfg, metadata.version("rsl-rl-lib")
         )
         agent_cfg.device = env_cfg.sim.device
+        from base_locomotion_stackforce_quadrupedal.training.checkpoint import checkpoint_runner_config
+
         runner = OnPolicyRunner(
-            vec_env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device
+            vec_env, checkpoint_runner_config(checkpoint, agent_cfg.to_dict()), log_dir=None, device=agent_cfg.device
         )
         runner.load(str(checkpoint))
         policy = runner.get_inference_policy(device=env_cfg.sim.device)
+        print(f"[VALIDATION] checkpoint loaded: {checkpoint}", flush=True)
 
     try:
+        print(f"[VALIDATION] running {len(DEFAULT_VALIDATION_SCENARIOS)} scenarios", flush=True)
         scenario_metrics = {
             scenario.name: _run_scenario(base_env.unwrapped, vec_env, policy, scenario)
             for scenario in DEFAULT_VALIDATION_SCENARIOS
@@ -188,6 +307,9 @@ def main() -> None:
             "seed": args_cli.seed,
             "num_envs": args_cli.num_envs,
             "episode_steps": args_cli.episode_steps,
+            "terrain_level": args_cli.terrain_level,
+            "terrain_profile": args_cli.terrain_profile,
+            "curriculum_frozen": True,
             "sim_dt_s": float(env_cfg.sim.dt),
             "policy_dt_s": float(base_env.unwrapped.step_dt),
             "checkpoint": str(checkpoint) if checkpoint is not None else None,
@@ -210,6 +332,7 @@ def main() -> None:
         output.write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+        _upload_wandb(report, checkpoint, output)
         print(json.dumps(report["selection_evidence"], indent=2))
         print(f"[VALIDATION] report={output}")
     finally:
@@ -219,5 +342,10 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        raise
     finally:
         simulation_app.close()

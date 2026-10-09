@@ -1,0 +1,7 @@
+version: E0-v1-46d
+name: motion_family_rehearsal
+motion_family:
+  params:
+    success_tracking_rmse: 0.30
+    success_yaw_rmse: 0.35
+    sampling_floor: 0.05

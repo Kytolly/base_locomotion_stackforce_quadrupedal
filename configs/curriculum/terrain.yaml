@@ -1,0 +1,8 @@
+version: E0-v1-46d
+name: terrain_competence
+terrain_levels:
+  params:
+    tracking_rmse_range: [0.30, 0.18]
+    yaw_rmse_range: [0.35, 0.20]
+    progress_ratio_range: [0.60, 0.80]
+    demotion_progress_ratio: 0.25

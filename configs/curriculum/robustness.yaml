@@ -1,0 +1,7 @@
+version: E0-v1-46d
+name: robustness_bins
+robustness_bin:
+  params:
+    nominal_level: 0
+    moderate_level: 2
+    stress_level: 5

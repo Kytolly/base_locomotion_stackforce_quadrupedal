@@ -13,6 +13,16 @@ from isaaclab.utils.configclass import configclass
 
 LOCOMOTION_COMMAND_NAME = "locomotion"
 LOCOMOTION_COMMAND_DIM = 4
+LOCOMOTION_COMMAND_MODE_COUNT = 7
+MOTION_FAMILY_NAMES = (
+    "stop_stand",
+    "forward",
+    "backward",
+    "lateral",
+    "yaw_only",
+    "curved_forward",
+    "curved_backward",
+)
 FORWARD = 0
 LATERAL = 1
 YAW_RATE = 2
@@ -52,6 +62,21 @@ class LocomotionCommand(CommandTerm):
             (self.num_envs, LOCOMOTION_COMMAND_DIM), device=self.device
         )
         self._target_command = torch.zeros_like(self._command)
+        default_height = sum(cfg.ranges.body_height_m) * 0.5
+        self._command[:, BODY_HEIGHT] = default_height
+        self._target_command[:, BODY_HEIGHT] = default_height
+        self._feasible_mask = torch.ones_like(self._command)
+        self._motion_family = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._command_transition_id = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._temporal_loss_grace = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._sampling_probabilities = torch.tensor(
+            cfg.mode_probabilities, dtype=torch.float32, device=self.device
+        )
+        self._base_sampling_probabilities = self._sampling_probabilities.clone()
         self._max_rate = torch.tensor(cfg.max_rate, device=self.device)
         self.cfg.cmd_kind = self.cfg.cmd_kind or "command/body/locomotion"
         self.cfg.element_names = self.cfg.element_names or [
@@ -70,6 +95,50 @@ class LocomotionCommand(CommandTerm):
     def raw_command(self) -> torch.Tensor:
         """Return the sampled target before rate limiting."""
         return self._target_command
+
+    @property
+    def feasible_mask(self) -> torch.Tensor:
+        """Return per-command-component feasibility flags for logging."""
+        return self._feasible_mask
+
+    @property
+    def motion_family(self) -> torch.Tensor:
+        """Return the sampled family index for each environment."""
+        return self._motion_family
+
+    @property
+    def command_transition_id(self) -> torch.Tensor:
+        """Return the monotonically increasing command transition id."""
+        return self._command_transition_id
+
+    @property
+    def temporal_loss_valid(self) -> torch.Tensor:
+        """Return a mask that excludes command-transition steps from smoothing losses."""
+        return (self._temporal_loss_grace == 0).unsqueeze(-1).float()
+
+    def _mark_command_transition(self, env_ids: Sequence[int] | slice) -> None:
+        self._command_transition_id[env_ids] += 1
+        self._temporal_loss_grace[env_ids] = self.cfg.temporal_loss_grace_steps + 1
+
+    @property
+    def sampling_probabilities(self) -> torch.Tensor:
+        return self._sampling_probabilities
+
+    def set_sampling_floor(self, floor: float) -> None:
+        """Keep every command family in the training distribution."""
+        self.set_sampling_probabilities(self._sampling_probabilities, floor=floor)
+
+    def set_sampling_probabilities(self, probabilities: torch.Tensor, floor: float = 0.0) -> None:
+        """Update family sampling while enforcing a non-zero rehearsal floor."""
+        if probabilities.shape != (LOCOMOTION_COMMAND_MODE_COUNT,):
+            raise ValueError("Expected one sampling probability per motion family.")
+        if not 0.0 <= floor < 1.0 / LOCOMOTION_COMMAND_MODE_COUNT:
+            raise ValueError("sampling floor must be in [0, 1/7).")
+        probabilities = torch.nan_to_num(probabilities.to(self.device), nan=0.0).clamp_min(0.0)
+        if float(probabilities.sum()) <= 0.0:
+            probabilities = self._base_sampling_probabilities.clone()
+        probabilities = probabilities.clamp_min(floor)
+        self._sampling_probabilities = probabilities / probabilities.sum()
 
     def set_command(
         self, command: torch.Tensor, env_ids: Sequence[int] | None = None
@@ -90,14 +159,18 @@ class LocomotionCommand(CommandTerm):
             raise ValueError(
                 "Validation body-height commands must be strictly positive."
             )
-        self._target_command[env_ids] = command.to(self.device)
-        self._command[env_ids] = command.to(self.device)
+        command = command.to(self.device)
+        self._target_command[env_ids] = command
+        self._command[env_ids] = self._clamp_command(command)
+        self._feasible_mask[env_ids] = self._command_feasibility(command)
+        self._motion_family[env_ids] = -1
+        self._mark_command_transition(env_ids)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         if env_ids is None:
             env_ids = slice(None)
         extras = super().reset(env_ids)
-        self._command[env_ids] = self._target_command[env_ids]
+        self._command[env_ids] = self._clamp_command(self._target_command[env_ids])
         return extras
 
     def _resample_command(self, env_ids: Sequence[int]) -> None:
@@ -107,7 +180,7 @@ class LocomotionCommand(CommandTerm):
             return torch.empty(count, device=self.device).uniform_(*bounds)
 
         ranges = self.cfg.ranges
-        mode = torch.randint(0, 7, (count,), device=self.device)
+        mode = torch.multinomial(self._sampling_probabilities, count, replacement=True)
         command = torch.zeros((count, LOCOMOTION_COMMAND_DIM), device=self.device)
         minimum_speed = max(0.0, ranges.forward_velocity_mps[0])
         maximum_speed = ranges.forward_velocity_mps[1]
@@ -124,8 +197,16 @@ class LocomotionCommand(CommandTerm):
         command[mode == 5, YAW_RATE] = moving_yaw[mode == 5]
         command[mode == 6, FORWARD] = -moving_speed[mode == 6]
         command[mode == 6, YAW_RATE] = moving_yaw[mode == 6]
+        diagonal = torch.rand(count, device=self.device) < self.cfg.diagonal_probability
+        coupled = (mode == 5) | (mode == 6)
+        command[coupled & diagonal, LATERAL] = lateral[coupled & diagonal]
         self._target_command[env_ids] = command
         self._target_command[env_ids, BODY_HEIGHT] = sample(ranges.body_height_m)
+        self._motion_family[env_ids] = mode
+        self._mark_command_transition(env_ids)
+        self._feasible_mask[env_ids] = self._command_feasibility(
+            self._target_command[env_ids]
+        )
 
     def _update_command(self) -> None:
         max_delta = self._max_rate * float(self._env.step_dt)
@@ -133,6 +214,8 @@ class LocomotionCommand(CommandTerm):
             self._target_command - self._command, min=-max_delta, max=max_delta
         )
         self._command.add_(delta)
+        self._command.copy_(self._clamp_command(self._command))
+        self._temporal_loss_grace.sub_(1).clamp_(min=0)
 
     def _update_metrics(self) -> None:
         pass
@@ -157,6 +240,49 @@ class LocomotionCommand(CommandTerm):
             raise ValueError(
                 f"max_rate must contain {LOCOMOTION_COMMAND_DIM} finite positive values."
             )
+        probabilities = self.cfg.mode_probabilities
+        if (
+            len(probabilities) != 7
+            or not all(math.isfinite(value) and value >= 0.0 for value in probabilities)
+            or not math.isclose(sum(probabilities), 1.0, rel_tol=0.0, abs_tol=1.0e-6)
+        ):
+            raise ValueError(
+                "mode_probabilities must contain seven non-negative values that sum to one."
+            )
+        if not 0.0 <= self.cfg.diagonal_probability <= 1.0:
+            raise ValueError("diagonal_probability must be in [0, 1].")
+
+    def _clamp_command(self, command: torch.Tensor) -> torch.Tensor:
+        ranges = self.cfg.ranges
+        bounds = (
+            (-max(abs(ranges.forward_velocity_mps[0]), abs(ranges.forward_velocity_mps[1])),
+             max(abs(ranges.forward_velocity_mps[0]), abs(ranges.forward_velocity_mps[1]))),
+            ranges.lateral_velocity_mps,
+            ranges.yaw_rate_radps,
+            ranges.body_height_m,
+        )
+        result = command.clone()
+        for index, (lower, upper) in enumerate(bounds):
+            result[:, index] = result[:, index].clamp(float(lower), float(upper))
+        return torch.nan_to_num(result)
+
+    def _command_feasibility(self, command: torch.Tensor) -> torch.Tensor:
+        ranges = self.cfg.ranges
+        bounds = (
+            (-max(abs(ranges.forward_velocity_mps[0]), abs(ranges.forward_velocity_mps[1])),
+             max(abs(ranges.forward_velocity_mps[0]), abs(ranges.forward_velocity_mps[1]))),
+            ranges.lateral_velocity_mps,
+            ranges.yaw_rate_radps,
+            ranges.body_height_m,
+        )
+        flags = []
+        for index, (lower, upper) in enumerate(bounds):
+            flags.append(
+                torch.isfinite(command[:, index])
+                & (command[:, index] >= float(lower))
+                & (command[:, index] <= float(upper))
+            )
+        return torch.stack(flags, dim=-1).float()
 
 
 @configclass
@@ -166,13 +292,17 @@ class LocomotionCommandCfg(CommandTermCfg):
     class_type: type[CommandTerm] = LocomotionCommand
     resampling_time_range: tuple[float, float] = (10.0, 10.0)
     max_rate: tuple[float, float, float, float] = (0.5, 0.5, 0.5, 0.02)
+    # stop, forward, backward, lateral, yaw, forward+yaw, backward+yaw
+    mode_probabilities: tuple[float, ...] = (0.10, 0.30, 0.10, 0.10, 0.10, 0.20, 0.10)
+    diagonal_probability: float = 0.20
+    temporal_loss_grace_steps: int = 2
 
     @configclass
     class Ranges:
         forward_velocity_mps: tuple[float, float] = (0.15, 0.45)
         lateral_velocity_mps: tuple[float, float] = (-0.10, 0.10)
         yaw_rate_radps: tuple[float, float] = (-0.25, 0.25)
-        body_height_m: tuple[float, float] = (0.105, 0.105)
+        body_height_m: tuple[float, float] = (0.095, 0.115)
 
     ranges: Ranges = Ranges()
 
@@ -187,3 +317,11 @@ def locomotion_command(
             f"Expected locomotion commands with shape (..., {LOCOMOTION_COMMAND_DIM}), received {tuple(command.shape)}."
         )
     return command
+
+
+def temporal_loss_valid(
+    env, command_name: str = LOCOMOTION_COMMAND_NAME
+) -> torch.Tensor:
+    """Expose a training-only mask for temporal policy regularization."""
+    command_term = env.command_manager.get_term(command_name)
+    return command_term.temporal_loss_valid

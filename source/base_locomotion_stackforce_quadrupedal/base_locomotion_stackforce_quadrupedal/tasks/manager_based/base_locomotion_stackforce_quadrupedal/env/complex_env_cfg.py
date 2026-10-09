@@ -12,21 +12,23 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import DomeLightCfg
+from isaaclab.sim import DomeLightCfg, SimulationCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
+from isaaclab_physx.physics import PhysxCfg
 
-from ..mdp import events, support, terminations
-from ..mdp import curriculum
+from ..mdp import curricula, events, support, terminations
 from ..mdp.action import RobotActionCfg
 from ..mdp.observation import history, privileged, proprioception
 from ..mdp.policy import LocomotionCommandCfg
 from ..mdp.policy import commands as command_mdp
 from ..mdp.reward import locomotion as reward_mdp
 from .robots import ACTIVE_JOINTS, create_robot_articulation_cfg
-from .terrains import TERRAIN_FAMILIES, get_complex_terrain_cfg
+from .terrains import TRAINING_TERRAIN_FAMILIES, get_complex_terrain_cfg
+from ..evaluation.metric.recorder import LocomotionRecordersCfg
+from ..mdp.policy.input import ACTOR_INPUT_DIM
 
 
 @configclass
@@ -78,7 +80,9 @@ class ComplexSceneCfg(InteractiveSceneCfg):
         track_pose=True,
     )
     base_contact = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/Geometry/base_link",
+        # Anchor the regex so PhysX binds only the outer rigid body. The visual
+        # instance is named ``base_link_visual`` and must not become a sensor body.
+        prim_path="{ENV_REGEX_NS}/Robot/Geometry/base_link$",
         history_length=3,
         update_period=0.005,
     )
@@ -118,7 +122,7 @@ class ObservationsCfg:
         previous_action = ObsTerm(func=history.previous_action)
 
         def __post_init__(self) -> None:
-            self.enable_corruption = False
+            self.enable_corruption = True
             self.concatenate_terms = True
 
     @configclass
@@ -136,8 +140,18 @@ class ObservationsCfg:
             self.enable_corruption = False
             self.concatenate_terms = True
 
+    @configclass
+    class TrainingAuxiliaryCfg(ObsGroup):
+        temporal_loss_valid = ObsTerm(func=command_mdp.temporal_loss_valid)
+        previous_action = ObsTerm(func=history.previous_action)
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
     policy: PolicyCfg = PolicyCfg()
     privileged: PrivilegedCfg = PrivilegedCfg()
+    training_auxiliary: TrainingAuxiliaryCfg = TrainingAuxiliaryCfg()
 
 
 @configclass
@@ -186,7 +200,7 @@ class EventCfg:
     reset_root = EventTerm(
         func=events.reset_root_to_default,
         mode="reset",
-        params={"asset_cfg": SceneEntityCfg("robot")},
+        params={"asset_cfg": SceneEntityCfg("robot"), "slope_approach_fraction": 0.5},
     )
     reset_joints = EventTerm(
         func=mdp.reset_joints_by_offset,
@@ -203,23 +217,49 @@ class EventCfg:
 class RewardsCfg:
     track_forward_velocity = RewTerm(
         func=reward_mdp.track_forward_velocity_exp,
-        weight=1.5,
+        weight=2.5,
         params={"std": 0.25, "asset_cfg": SceneEntityCfg("robot")},
     )
     track_lateral_velocity = RewTerm(
         func=reward_mdp.track_lateral_velocity_exp,
-        weight=0.5,
+        weight=0.75,
         params={"std": 0.20, "asset_cfg": SceneEntityCfg("robot")},
     )
     track_yaw_rate = RewTerm(
         func=reward_mdp.track_yaw_rate_exp,
-        weight=0.5,
+        weight=0.75,
         params={"std": 0.25, "asset_cfg": SceneEntityCfg("robot")},
     )
     track_body_height = RewTerm(
         func=reward_mdp.track_body_height_exp,
         weight=0.5,
         params={"std": 0.02, "asset_cfg": SceneEntityCfg("robot")},
+    )
+    directed_planar_progress = RewTerm(
+        func=reward_mdp.directed_planar_progress,
+        weight=2.0,
+        params={"command_deadband": 0.05, "asset_cfg": SceneEntityCfg("robot")},
+    )
+    planar_velocity_error = RewTerm(
+        func=reward_mdp.planar_velocity_error_l2,
+        # Strong enough to suppress the forward-only solution on stop/reverse commands.
+        weight=-4.0,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+    wrong_way_velocity = RewTerm(
+        func=reward_mdp.wrong_way_velocity_ratio_l2,
+        # A reverse response must be more expensive than simply standing still.
+        weight=-8.0,
+        params={"command_deadband": 0.05, "asset_cfg": SceneEntityCfg("robot")},
+    )
+    low_body_height_margin = RewTerm(
+        func=reward_mdp.low_body_height_margin_l2,
+        weight=-1.0,
+        params={
+            "warning_height": 0.08,
+            "margin": 0.02,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
     )
     orientation = RewTerm(
         func=reward_mdp.orientation_l2,
@@ -247,7 +287,8 @@ class RewardsCfg:
     )
     action_saturation = RewTerm(
         func=reward_mdp.action_saturation,
-        weight=-0.05,
+        # Prevent the policy from relying on clipped wheel/leg commands on hard terrain.
+        weight=-0.5,
         params={"threshold": 0.95},
     )
     unsafe_termination = RewTerm(func=mdp.is_terminated, weight=-250.0)
@@ -272,13 +313,34 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    terrain_levels = CurrTerm(func=curriculum.terrain_levels_by_episode_performance)
+    terrain_levels = CurrTerm(
+        func=curricula.terrain_levels_by_episode_performance,
+        params={
+            "tracking_rmse_range": (0.30, 0.18),
+            "yaw_rmse_range": (0.35, 0.20),
+            "progress_ratio_range": (0.60, 0.80),
+            "demotion_progress_ratio": 0.25,
+        },
+    )
+    motion_family = CurrTerm(
+        func=curricula.motion_family_rehearsal,
+        params={
+            "success_tracking_rmse": 0.30,
+            "success_yaw_rmse": 0.35,
+            "sampling_floor": 0.05,
+        },
+    )
+    robustness_bin = CurrTerm(
+        func=curricula.robustness_bin_schedule,
+        params={"nominal_level": 0, "moderate_level": 2, "stress_level": 5},
+    )
 
 
 @configclass
 class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
+    sim: SimulationCfg = SimulationCfg(physics=PhysxCfg())
     scene: ComplexSceneCfg = ComplexSceneCfg(
-        num_envs=64, env_spacing=4.0, replicate_physics=False
+        num_envs=4096, env_spacing=4.0, replicate_physics=False
     )
     observations: ObservationsCfg = ObservationsCfg()
     actions: RobotActionCfg = RobotActionCfg()
@@ -287,10 +349,19 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     curriculum: CurriculumCfg = CurriculumCfg()
+    recorders: LocomotionRecordersCfg = LocomotionRecordersCfg()
     active_joint_names: list[str] = list(ACTIVE_JOINTS)
-    terrain_families: tuple[str, ...] = TERRAIN_FAMILIES
+    terrain_profile: str = "union_expansion"
+    terrain_families: tuple[str, ...] = TRAINING_TERRAIN_FAMILIES
+    observation_profile: str = "P0"
+    protocol_version: str = "E0-v1-46d"
+    actor_observation_dim: int = ACTOR_INPUT_DIM
 
     def __post_init__(self) -> None:
+        if self.observation_profile == "P0" and self.actor_observation_dim != 46:
+            raise RuntimeError(
+                f"The E0 P0 task requires the frozen 46D Actor contract, got {self.actor_observation_dim}."
+            )
         self.decimation = 4
         self.episode_length_s = 30.0
         self.sim.dt = 1 / 200
@@ -299,6 +370,7 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
         for sensor_name in ("contact_fr", "contact_fl", "contact_rl", "contact_rr", "base_contact"):
             getattr(self.scene, sensor_name).update_period = self.sim.dt
         self.scene.terrain.terrain_generator = get_complex_terrain_cfg(
-            seed=42 if self.seed is None else int(self.seed)
+            seed=42 if self.seed is None else int(self.seed),
+            profile=self.terrain_profile,
         )
         self.scene.terrain.terrain_generator.curriculum = self.curriculum.terrain_levels is not None
