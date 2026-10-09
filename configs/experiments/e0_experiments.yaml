@@ -28,6 +28,9 @@ experiments:
   a3_minus_temp:
     batch: B3
     config: configs/train/auxiliary/a3_minus_temp.yaml
+  a3_all_expert_ortho:
+    batch: B3
+    config: configs/train/auxiliary/a3_all_expert_ortho.yaml
   a4_ppo_total_capacity:
     batch: B3
     config: configs/train/auxiliary/a4_ppo_total_capacity.yaml

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -120,15 +121,22 @@ def require_compatible_training_contract(
 
 def _without_terrain_mix(payload: Any) -> Any:
     """Remove only the staged terrain-profile fields from a contract payload."""
-    if isinstance(payload, Mapping):
-        return {
-            key: _without_terrain_mix(value)
-            for key, value in payload.items()
-            if key not in {"proportion", "terrain_profile"}
-        }
-    if isinstance(payload, list):
-        return [_without_terrain_mix(value) for value in payload]
-    return payload
+    result = deepcopy(payload)
+    if not isinstance(result, dict):
+        return result
+    environment = result.get("environment", {})
+    environment.pop("terrain_profile", None)
+    generator = environment.get("scene", {}).get("terrain", {}).get("terrain_generator", {})
+    for terrain in (generator or {}).get("sub_terrains", {}).values():
+        terrain.pop("proportion", None)
+    return result
+
+
+def resume_training_runner(runner: Any, checkpoint: str) -> None:
+    """Resume after the saved zero-based update, including Adam and adaptive LR."""
+    runner.load(checkpoint)
+    runner.current_learning_iteration += 1
+    runner.alg.learning_rate = runner.alg.optimizer.param_groups[0]["lr"]
 
 
 def checkpoint_runner_config(checkpoint: Path, fallback: dict) -> dict:

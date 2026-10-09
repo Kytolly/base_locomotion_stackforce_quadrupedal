@@ -27,7 +27,7 @@ The logging contract separates custom metric collection from dashboard visibilit
 
 The intended contract is that `metrics` controls collection and `wandb_panels` filters custom scalars sent to W&B/TensorBoard; it does not remove existing web dashboard panels. RSL-RL's built-in PPO scalars are unaffected.
 
-Both training entrypoints currently resolve this configuration before passing it to `TrainingMetricsWrapper`, which resolves it again using the raw YAML schema. This resets custom group and `enabled` overrides to the resolver defaults. Do not assume expanded logging is active merely because its YAML switch is true. The current limitation and configuration owner are documented in [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md).
+Both training entrypoints pass the raw logging configuration to `TrainingMetricsWrapper` for one resolution. Custom scalars are emitted when episodes finish; a smoke without completed episodes cannot verify their presence. See [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md).
 
 ## Short smoke
 
@@ -56,7 +56,7 @@ This is only a pipeline/contract smoke, not evidence of locomotion performance.
 
 ## Long training
 
-The command below starts the full 20k-iteration E0 run. It is intentionally not launched as part of repository changes. E0 defaults to `launcher.viz=none`; use `launcher.viz=kit` explicitly for GUI inspection. `max_visible_envs` affects visibility, not the simulation environment count:
+The command below starts only Foundation (1,000 iterations). The complete 20,000-update budget requires explicit stage resumes described in [E0_EXPERIMENT_COMMANDS.md](E0_EXPERIMENT_COMMANDS.md). E0 defaults to `launcher.viz=none`; use `launcher.viz=kit` explicitly for GUI inspection. `max_visible_envs` affects visibility, not the simulation environment count:
 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python \

@@ -185,6 +185,10 @@ def validate_training_config(config: DictConfig) -> None:
         if architecture not in {"mlp", "sparse_moe"}:
             raise ValueError(f"Unknown agent.{model_name}.architecture: {architecture!r}.")
         if architecture == "sparse_moe":
+            for key, choices in (("expert_dispatch", {"topk", "dense"}),
+                                 ("orthogonality_scope", {"active", "all"})):
+                if key in model and model[key] not in choices:
+                    raise ValueError(f"Invalid agent.{model_name}.{key}: {model[key]!r}.")
             num_experts = int(model.get("num_experts", 6))
             top_k = int(model.get("top_k", 2))
             if not 1 <= top_k <= num_experts:

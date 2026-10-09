@@ -28,6 +28,20 @@ python scripts/rsl_rl/train.py \
 Use another YAML path to select another experiment. Command-line overrides are
 reserved for stage progression, seed selection, resume paths, and diagnostics.
 
+Direct YAML execution runs Foundation only (1,000 updates). Checkpoint names
+use the last completed zero-based iteration: Foundation ends at `model_999.pt`;
+Expansion resumes at 1,000 and ends at `model_5999.pt`. `max_iterations` is
+the number of additional updates, not an absolute endpoint. Adam state and its
+adaptive learning rate are restored along with the policy.
+
+MoE defaults to per-sample Top-2 dispatch. Only selected expert rows are
+evaluated; this reduces expert matrix work but does not guarantee lower latency
+because routing/indexing adds overhead. Active-only orthogonality uses normalized
+Actor outputs of shape `[batch, 2, action_dim]` and the mean squared Gram error.
+`auxiliary/a3_all_expert_ortho.yaml` preserves the normalized all-six-expert loss
+as a separate control; it evaluates all Actor experts and is not compute-sparse.
+See [E0_REVIEW_CC84.md](E0_REVIEW_CC84.md) for fidelity limits and smoke evidence.
+
 ## Inspect the matrix
 
 Print the foundation command for one run:

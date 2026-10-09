@@ -173,7 +173,7 @@ def test_checkpoint_resume_requires_matching_training_contract(tmp_path):
     staged_env["terrain_profile"] = "union_foundation"
     staged_env["scene"] = {
         "num_envs": 64,
-        "terrain": {"sub_terrains": {"flat": {"proportion": 0.6}}},
+        "terrain": {"terrain_generator": {"sub_terrains": {"flat": {"proportion": 0.6}}}},
     }
     staged_contract = build_training_contract("task-v0", staged_env, agent)
     save_training_contract(tmp_path, staged_contract)
@@ -181,7 +181,7 @@ def test_checkpoint_resume_requires_matching_training_contract(tmp_path):
     next_stage_env["terrain_profile"] = "union_expansion"
     next_stage_env["scene"] = {
         "num_envs": 64,
-        "terrain": {"sub_terrains": {"flat": {"proportion": 0.2}}},
+        "terrain": {"terrain_generator": {"sub_terrains": {"flat": {"proportion": 0.2}}}},
     }
     next_stage_contract = build_training_contract("task-v0", next_stage_env, agent)
     require_compatible_training_contract(
@@ -189,6 +189,13 @@ def test_checkpoint_resume_requires_matching_training_contract(tmp_path):
     )
     with pytest.raises(ValueError, match="training contract differs"):
         require_compatible_training_contract(checkpoint, next_stage_contract)
+
+    next_stage_env["commands"] = {"proportion": 0.5}
+    with pytest.raises(ValueError, match="training contract differs"):
+        require_compatible_training_contract(
+            checkpoint, build_training_contract("task-v0", next_stage_env, agent),
+            allow_terrain_mix_transition=True,
+        )
 
     (tmp_path / "training_contract.json").unlink()
     with pytest.raises(FileNotFoundError, match="formal training must start"):

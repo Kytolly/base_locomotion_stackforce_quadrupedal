@@ -199,7 +199,6 @@ def main() -> None:
 
     from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
     from isaaclab_tasks.utils import (
-        get_checkpoint_path,
         load_cfg_from_registry,
         parse_env_cfg,
     )
@@ -213,6 +212,7 @@ def main() -> None:
         checkpoint_runner_config,
         require_compatible_training_contract,
         save_training_contract,
+        resume_training_runner,
     )
 
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -277,6 +277,7 @@ def main() -> None:
 
     render_mode = "rgb_array" if bool(config.video.enabled) else None
     env = None
+    exit_code = 0
     try:
         print(f"[TRAIN] creating_env task={task}", flush=True)
         env = gym.make(task, cfg=env_cfg, render_mode=render_mode)
@@ -300,9 +301,9 @@ def main() -> None:
         )
         runner.add_git_repo_to_log(__file__)
         if agent_cfg.resume:
-            checkpoint = get_checkpoint_path(
-                str(log_dir.parent), agent_cfg.load_run, agent_cfg.load_checkpoint
-            )
+            checkpoint = str(log_dir.parent / agent_cfg.load_run / agent_cfg.load_checkpoint)
+            if not Path(checkpoint).is_file():
+                raise FileNotFoundError(checkpoint)
             print(f"[TRAIN] resuming checkpoint={checkpoint}")
             require_compatible_training_contract(
                 Path(checkpoint),
@@ -314,7 +315,8 @@ def main() -> None:
             saved_cfg = checkpoint_runner_config(Path(checkpoint), agent_cfg.to_dict())
             if saved_cfg["actor"]["distribution_cfg"] != agent_cfg.to_dict()["actor"]["distribution_cfg"]:
                 raise ValueError("Resume cannot change the action distribution. Start a new run with agent.resume=false.")
-            runner.load(checkpoint)
+            resume_training_runner(runner, checkpoint)
+            print(f"[TRAIN] next_iteration={runner.current_learning_iteration} learning_rate={runner.alg.learning_rate}")
 
         print(f"[TRAIN] config={args.config.resolve()}")
         print(f"[TRAIN] log_dir={log_dir}")
@@ -326,12 +328,13 @@ def main() -> None:
         )
         print(f"[TRAIN] completed_seconds={time.time() - started:.2f}")
     except BaseException:
+        exit_code = 1
         traceback.print_exc()
         raise
     finally:
         if env is not None:
             env.close()
-        simulation_app.close()
+        simulation_app.close(exit_code=exit_code)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def test_experiment_configs_are_split_and_enable_all_logging() -> None:
         "b2_moe_reflex",
         "b2_bisec_full",
     }
-    assert len(list(auxiliary_dir.glob("*.yaml"))) == 15
+    assert len(list(auxiliary_dir.glob("*.yaml"))) == 16
 
     for config_path in (*main_dir.glob("*.yaml"), *auxiliary_dir.glob("*.yaml")):
         config = load_config(config_path)
@@ -60,3 +60,30 @@ def test_experiment_matrix_points_to_named_training_configs() -> None:
         config_path = PROJECT_ROOT / experiment.config
         assert config_path.is_file()
         assert config_path.stem == name
+
+
+def test_matrix_preserves_shared_contract_except_declared_ablations() -> None:
+    matrix = OmegaConf.load(PROJECT_ROOT / "configs/experiments/e0_experiments.yaml")
+    baseline = load_config(PROJECT_ROOT / "configs/train/main/b0_t1_ppo.yaml")
+    assert len(matrix.experiments) == 20  # Original 19 plus all-expert orthogonality control.
+    for name, experiment in matrix.experiments.items():
+        config = load_config(PROJECT_ROOT / experiment.config)
+        validate_training_config(config)
+        for section in ("env", "launcher", "runtime", "logging", "video"):
+            assert config[section] == baseline[section], (name, section)
+        for key, value in baseline.agent.algorithm.items():
+            assert config.agent.algorithm[key] == value, (name, key)
+        for key in ("num_steps_per_env", "max_iterations", "clip_actions", "save_interval"):
+            assert config.agent[key] == baseline.agent[key], (name, key)
+        assert config.agent.actor.distribution_cfg == baseline.agent.actor.distribution_cfg
+        if name.startswith("fixed_curriculum"):
+            assert all(value is None for value in config.curriculum.values())
+        else:
+            assert config.curriculum == baseline.curriculum
+        expected_dim = next((dim for prefix, dim in (("p1_", 184), ("p2_", 76), ("p3_", 304))
+                             if name.startswith(prefix)), 46)
+        assert config.actor_observation_dim == expected_dim
+        if expected_dim == 46:
+            assert config.task == baseline.task
+        if name.startswith("p0_no_privileged"):
+            assert config.agent.obs_groups.critic == ["policy"]

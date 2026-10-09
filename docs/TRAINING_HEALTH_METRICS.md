@@ -9,7 +9,7 @@
 
 ## 核心监控与扩展诊断
 
-解析器推荐默认仅开启 `core`、`safety`、`runtime`。PPO 内建 reward、episode length、loss、KL 和耗时始终由 runner 记录；扩展指标不是精简面板的必需项。当前工作区 E0 YAML 全组为 true，但训练入口的二次解析会重置自定义开关，详见 [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md)。修复该限制并核对实际日志键后，才能依赖扩展组做日常诊断。
+解析器默认仅开启 `core`、`safety`、`runtime`；E0 实验 YAML 显式开启全部九组采集和面板输出。训练入口将原始配置交给 wrapper 解析一次。扩展指标在 episode 结束时输出，PPO 内建指标由 runner 单独记录。配置合同见 [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md)。
 
 | 用途 | 自定义组 |
 | --- | --- |
@@ -192,7 +192,7 @@ Mean reward
 Mean episode length
 ```
 
-地形课程异常时再诊断 `terrain/level`、`difficulty_midpoint`；输出质量异常时诊断 `actuation/action_saturation_rate`、`wheel_action_rms` 与 `support/wheel_contact_fraction`。这些扩展组的开关须先确认未被入口二次解析覆盖。
+地形课程异常时诊断 `terrain/level`、`difficulty_midpoint`；输出质量异常时诊断 `actuation/action_saturation_rate`、`wheel_action_rms` 与 `support/wheel_contact_fraction`。检查 resolved YAML 的组开关，并等待 episode 完成后核对实际日志键。
 
 最简判断规则：
 

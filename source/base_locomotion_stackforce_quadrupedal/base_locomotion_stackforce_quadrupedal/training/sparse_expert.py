@@ -34,11 +34,14 @@ class SharedTopKGate(nn.Module):
         self.network = MLP(input_dim, num_experts, hidden_dims, activation)
 
     def forward(self, policy_observation: torch.Tensor) -> torch.Tensor:
+        return self.route(policy_observation)[0]
+
+    def route(self, policy_observation: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits = self.network(policy_observation)
         top_values, top_indices = torch.topk(logits, self.top_k, dim=-1)
         sparse_weights = torch.zeros_like(logits)
         sparse_weights.scatter_(-1, top_indices, torch.softmax(top_values, dim=-1))
-        return sparse_weights
+        return sparse_weights, top_indices
 
 
 class SparseExpertNetwork(nn.Module):
@@ -56,6 +59,8 @@ class SparseExpertNetwork(nn.Module):
         reflex_enabled: bool,
         reflex_hidden_dims: tuple[int, ...] | list[int],
         reflex_scale: float,
+        expert_dispatch: str = "topk",
+        orthogonality_scope: str = "active",
     ) -> None:
         super().__init__()
         if not 0.0 <= reflex_scale <= 1.0:
@@ -67,6 +72,13 @@ class SparseExpertNetwork(nn.Module):
             # reference so PPO sees each parameter exactly once.
             object.__setattr__(self, "shared_gate", shared_gate)
         self.policy_input_dim = policy_input_dim
+        if expert_dispatch not in {"topk", "dense"}:
+            raise ValueError("expert_dispatch must be topk or dense.")
+        if orthogonality_scope not in {"active", "all"}:
+            raise ValueError("orthogonality_scope must be active or all.")
+        self.expert_dispatch = expert_dispatch
+        self.orthogonality_scope = orthogonality_scope
+        self.output_dim = output_dim
         self.reflex_enabled = reflex_enabled
         self.reflex_scale = reflex_scale
         self.experts = nn.ModuleList(
@@ -85,9 +97,27 @@ class SparseExpertNetwork(nn.Module):
         self.last_final_output: torch.Tensor | None = None
 
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        weights = self.shared_gate(latent[..., : self.policy_input_dim])
-        expert_outputs = torch.stack([expert(latent) for expert in self.experts], dim=-2)
-        mixture = torch.sum(weights.unsqueeze(-1) * expert_outputs, dim=-2)
+        weights, selected_indices = self.shared_gate.route(latent[..., : self.policy_input_dim])
+        selected_weights = weights.gather(-1, selected_indices)
+        if self.expert_dispatch == "dense" or self.orthogonality_scope == "all":
+            all_outputs = torch.stack([expert(latent) for expert in self.experts], dim=-2)
+            active_outputs = all_outputs.gather(
+                -2, selected_indices.unsqueeze(-1).expand(*selected_indices.shape, self.output_dim)
+            )
+            expert_outputs = all_outputs if self.orthogonality_scope == "all" else active_outputs
+        else:
+            flat_latent = latent.reshape(-1, latent.shape[-1])
+            routes = selected_indices.reshape(-1, self.shared_gate.top_k)
+            outputs = latent.new_zeros((routes.numel(), self.output_dim))
+            for index, expert in enumerate(self.experts):
+                rows, slots = (routes == index).nonzero(as_tuple=True)
+                if rows.numel():
+                    outputs = outputs.index_copy(
+                        0, rows * self.shared_gate.top_k + slots, expert(flat_latent[rows])
+                    )
+            active_outputs = outputs.reshape(*selected_indices.shape, self.output_dim)
+            expert_outputs = active_outputs
+        mixture = torch.sum(selected_weights.unsqueeze(-1) * active_outputs, dim=-2)
         pre_reflex = mixture
         reflex_delta = torch.zeros_like(mixture)
         if self.reflex is not None:
@@ -125,6 +155,8 @@ class SparseExpertModel(MLPModel):
         reflex_hidden_dims: tuple[int, ...] | list[int] = (64,),
         reflex_scale: float = 0.25,
         shared_gate: SharedTopKGate | None = None,
+        expert_dispatch: str = "topk",
+        orthogonality_scope: str = "active",
     ) -> None:
         super().__init__(
             obs,
@@ -158,6 +190,8 @@ class SparseExpertModel(MLPModel):
                 reflex_enabled,
                 reflex_hidden_dims,
                 reflex_scale,
+                expert_dispatch,
+                orthogonality_scope,
             )
 
     def forward(
@@ -181,7 +215,7 @@ class SparseExpertModel(MLPModel):
             return self._last_policy_mean
         return mlp_output
 
-    def auxiliary_losses(self, obs: TensorDict) -> dict[str, torch.Tensor]:
+    def auxiliary_losses(self, obs: TensorDict, previous_mean: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         """Return the three BiSEC regularizers for the current Actor batch."""
         zero = next(self.parameters()).new_zeros(())
         if self.architecture != "sparse_moe":
@@ -196,19 +230,12 @@ class SparseExpertModel(MLPModel):
         gram = normalized @ normalized.transpose(-1, -2)
         eye = torch.eye(gram.shape[-1], device=gram.device, dtype=gram.dtype)
         expert_orthogonality = ((gram - eye) ** 2).mean()
-        auxiliary_observation = obs.get("training_auxiliary")
-        previous_action = (
-            auxiliary_observation[..., 1 : 1 + self._last_policy_mean.shape[-1]]
-            if auxiliary_observation is not None
-            else obs["policy"][..., -self._last_policy_mean.shape[-1] :]
-        )
-        temporal_error = (self._last_policy_mean - previous_action).pow(2).mean(dim=-1, keepdim=True)
-        mask = self._last_temporal_mask
-        temporal_consistency = (
-            (temporal_error * mask).sum() / mask.sum().clamp_min(1.0)
-            if mask is not None
-            else temporal_error.mean()
-        )
+        temporal_consistency = zero
+        if previous_mean is not None:
+            # Eq. (7) acts on the residual head output before the common action squash.
+            temporal_error = (network.last_final_output - previous_mean).square().sum(-1, keepdim=True)
+            mask = obs["temporal_pair_valid"] * obs["training_auxiliary"][..., :1]
+            temporal_consistency = (temporal_error * mask).sum() / mask.sum().clamp_min(1.0)
         return {
             "gate_entropy": gate_entropy,
             "expert_orthogonality": expert_orthogonality,
@@ -235,18 +262,43 @@ class SparseExpertPPO(PPO):
         gate_entropy_coef: float = 0.0,
         expert_orthogonality_coef: float = 0.0,
         temporal_consistency_coef: float = 0.0,
+        temporal_target: str = "adjacent_policy_mean_v1",
         optimizer: str = "adam",
         **kwargs,
     ) -> None:
         super().__init__(*args, optimizer=optimizer, **kwargs)
+        if self.is_multi_gpu:
+            raise ValueError("SparseExpertPPO supports single-GPU training only; sparse gradient reduction is not implemented.")
         if self.rnd is not None or self.symmetry is not None:
             raise ValueError("SparseExpertPPO does not combine BiSEC losses with RND or symmetry.")
         self.gate_entropy_coef = gate_entropy_coef
         self.expert_orthogonality_coef = expert_orthogonality_coef
         self.temporal_consistency_coef = temporal_consistency_coef
+        if temporal_target != "adjacent_policy_mean_v1":
+            raise ValueError("temporal_target must be adjacent_policy_mean_v1.")
+        self._previous_policy_observation = None
+        self._temporal_pair_valid = None
         self.optimizer = resolve_optimizer(optimizer)(
             _unique_parameters(self.actor, self.critic), lr=self.learning_rate
         )
+
+    def act(self, obs: TensorDict) -> torch.Tensor:
+        if self.temporal_consistency_coef:
+            paired = obs.clone()
+            previous = self._previous_policy_observation
+            paired["previous_policy_observation"] = obs["policy"].clone() if previous is None else previous
+            paired["temporal_pair_valid"] = (
+                obs["policy"].new_zeros((*obs.batch_size, 1))
+                if self._temporal_pair_valid is None else self._temporal_pair_valid
+            )
+            self._previous_policy_observation = obs["policy"].clone()
+            obs = paired
+        return super().act(obs)
+
+    def process_env_step(self, obs, rewards, dones, extras):
+        super().process_env_step(obs, rewards, dones, extras)
+        if self.temporal_consistency_coef:
+            self._temporal_pair_valid = (~dones.bool()).float().reshape(-1, 1)
 
     def update(self) -> dict[str, float]:
         totals = {
@@ -264,6 +316,12 @@ class SparseExpertPPO(PPO):
                     batch.advantages = (batch.advantages - batch.advantages.mean()) / (
                         batch.advantages.std() + 1.0e-8
                     )
+            previous_mean = None
+            if self.temporal_consistency_coef:
+                previous_obs = batch.observations.clone()
+                previous_obs["policy"] = previous_obs["previous_policy_observation"]
+                self.actor(previous_obs)
+                previous_mean = self.actor.mlp.last_final_output
             self.actor(batch.observations, stochastic_output=True)
             actions_log_prob = self.actor.get_output_log_prob(batch.actions)
             values = self.critic(batch.observations)
@@ -306,7 +364,7 @@ class SparseExpertPPO(PPO):
                 ).mean()
             else:
                 value_loss = (batch.returns - values).pow(2).mean()
-            auxiliary = self.actor.auxiliary_losses(batch.observations)
+            auxiliary = self.actor.auxiliary_losses(batch.observations, previous_mean)
             loss = (
                 surrogate_loss
                 + self.value_loss_coef * value_loss
@@ -366,6 +424,12 @@ class SparseExpertPPO(PPO):
         ).to(device)
         print(f"Actor Model: {actor}")
         print(f"Critic Model: {critic}")
+        if cfg["algorithm"].get("temporal_consistency_coef", 0):
+            if actor.architecture != "sparse_moe" or cfg["obs_groups"]["actor"] != ["policy"]:
+                raise ValueError("Temporal regularization requires a sparse Actor with the policy observation group.")
+            obs = obs.clone()
+            obs["previous_policy_observation"] = obs["policy"].clone()
+            obs["temporal_pair_valid"] = obs["policy"].new_zeros((*obs.batch_size, 1))
         storage = RolloutStorage(
             "rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device
         )

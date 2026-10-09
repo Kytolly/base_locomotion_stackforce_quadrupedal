@@ -20,7 +20,7 @@
 | 接触与安全 | `ComplexSceneCfg`、`mdp/support.py`、`mdp/terminations.py` | 四轮接触、机身碰撞、支撑有效性指标；相对支撑高度、过度倾斜和机身接触终止已配置，接触阈值仍需物理资格验收 |
 | Domain randomization | `EventCfg`、`ObservationsCfg` | 摩擦、基座质量、执行器增益采用窄范围启动随机化；本体传感项有小幅噪声；延迟未随机化，需先完成 actuator 时序标定 |
 | 训练配置 | `configs/train/main/b2_bisec_full.yaml`、`scripts/rsl_rl/train.py` | E0 为 4096 环境、24 steps/env、四阶段共 20000 iterations，默认无 GUI |
-| 自定义日志 | `evaluation/metric/logging.py` 与训练入口 | 推荐 core/safety/runtime；入口当前二次解析配置，扩展组和 enabled 覆盖会回退默认值 |
+| 自定义日志 | `evaluation/metric/logging.py` 与训练入口 | 原始 YAML 解析一次；E0 显式开启九组采集与面板输出，episode 结束时写入 |
 | W&B | E0 YAML 与 RSL-RL logger | 当前工作区 YAML 为 enabled/online；正式命令仍显式传参并记录 run id |
 | 运行日志 | `scripts/rsl_rl/train*.py` | 运行目录写入 `logs/rsl_rl/<experiment>/<run>` |
 | 模型 | RSL-RL runner | checkpoint 与该运行目录共存，尚无 `output/` 导出流程 |
@@ -34,7 +34,7 @@
 | G2 观测 | 4 维 Decision + 30 维 proprioception + last action | Actor 输入维度为 46，部署侧不读特权真值 | `output/observation_contract.json` |
 | G3 平地闭环 | 速度、偏航、高度跟踪和安全终止 | 停止/前进/后退/左转/右转均改变行为 | `logs/flat_*.log`，`output/flat_*.json` |
 | G4 地形 | 八类程序化地形、难度和局部支撑估计 | 轮接触/射线可用率、轮支撑比例、机身碰撞率和终止原因可按 terrain 记录；接触阈值及 slope/obstacle 物理表现需验收 | W&B + `output/evaluation/` |
-| G5 奖励与指标 | 跟踪、稳定、动作率、限位、饱和、机械功和 reward 分解 | wrapper 与日志组已实现；默认核心组可用，非默认开关需在入口二次解析修复后复验 | W&B + `logs/` |
+| G5 奖励与指标 | 跟踪、稳定、动作率、限位、饱和、机械功和 reward 分解 | 九组实写通过短测；测量的物理资格与策略性能仍需验收 | W&B + `logs/` |
 | G6 PPO smoke | E0 YAML、固定 seed、短 rollout、有限值检查 | 短训练管线已有有限值运行证据；同合同恢复和长期训练仍待验证，历史 smoke 不等于 E0 性能 PASS | `logs/`、运行目录配置快照 |
 | G7 验证与导出 | 固定五 command、八类 terrain、Plateau/Washboard、checkpoint 选择 | Plateau/Washboard 依序通过障碍检查点、保持赛道走廊、无不安全终止并完整结束 episode；性能阈值按 `docs/ACCEPTANCE_CRITERIA.md` 判定，尚无策略 PASS 证据 | `output/evaluation/`、`output/benchmark/`，W&B |
 

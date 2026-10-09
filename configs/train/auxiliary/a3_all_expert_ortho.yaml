@@ -1,0 +1,9 @@
+extends: ../main/b2_bisec_full.yaml
+
+agent:
+  run_name: a3_all_expert_ortho_foundation_seed${env.seed}
+  actor:
+    orthogonality_scope: all
+
+wandb:
+  group: e0-a3-all-expert-ortho

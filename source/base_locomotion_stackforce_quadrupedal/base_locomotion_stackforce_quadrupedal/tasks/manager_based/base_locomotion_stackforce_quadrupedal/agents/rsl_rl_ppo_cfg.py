@@ -23,6 +23,8 @@ class SparseExpertModelCfg(RslRlMLPModelCfg):
     architecture: str = "mlp"
     num_experts: int = 6
     top_k: int = 2
+    expert_dispatch: str = "topk"
+    orthogonality_scope: str = "active"
     expert_hidden_dims: list[int] = [128, 128]
     gate_hidden_dims: list[int] = [64, 64]
     reflex_enabled: bool = False
@@ -36,6 +38,7 @@ class SparseExpertPPOCfg(RslRlPpoAlgorithmCfg):
     gate_entropy_coef: float = 0.0
     expert_orthogonality_coef: float = 0.0
     temporal_consistency_coef: float = 0.0
+    temporal_target: str = "adjacent_policy_mean_v1"
 
 
 @configclass
