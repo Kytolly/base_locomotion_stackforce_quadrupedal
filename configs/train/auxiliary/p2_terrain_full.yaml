@@ -1,0 +1,11 @@
+extends: ../main/b2_bisec_full.yaml
+
+protocol_version: E0-v1-P2-terrain
+actor_observation_dim: 76
+task: Base-Locomotion-Stackforce-Quadrupedal-Terrain-v0
+
+agent:
+  run_name: p2_terrain_full_foundation_seed${env.seed}
+
+wandb:
+  group: e0-p2-terrain-full

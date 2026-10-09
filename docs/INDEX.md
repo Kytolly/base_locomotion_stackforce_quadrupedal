@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-截至 2026-10-09，当前主线为 `E0-v1-46d`，使用 `configs/train/base_locomotion_e0_46d.yaml` 和任务 `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0`。环境、接口、训练指标和固定验证流程已实现，但不等于策略性能通过验收：
+截至 2026-10-09，当前主线为 `E0-v1-46d`，最终模型使用 `configs/train/main/b2_bisec_full.yaml` 和任务 `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0`。环境、接口、训练指标和固定验证流程已实现，但不等于策略性能通过验收：
 
 - 机器人使用包内 `stackforce_quadrupedal_wheeled_robot_closed.usda`；
 - 12 个主动关节按 8 个腿部位置动作和 4 个轮速度动作分组；
@@ -12,7 +12,7 @@
 - policy observation 已按 4 维 Decision、30 维本体感知和 12 维上一动作组成 46 维，command 和 reward 共用 Command Manager 输出；
 - critic 额外读取 16 维当前特权真值；特权量不进入 policy observation；
 - Terrain-Union-v1 包含原八类、倒金字塔斜坡、平地和连续混合路线，并提供四阶段训练配比；
-- training metrics 已接入两个 RSL-RL 训练入口，通过 `extras["log"]` 交给日志后端；推荐精简组为 core/safety/runtime，开关限制见实验协议；
+- training metrics 已接入两个 RSL-RL 训练入口，通过 `extras["log"]` 交给日志后端；正式训练开启全部指标组和 W&B 面板组；
 - 固定 validation 覆盖 5 组 command、九类 rough primitive 和 DeepRobotics 来源对齐 profile，并输出 macro/worst-family 指标；
 - CPU 单环境 metrics smoke 与 64 环境零策略 validation smoke 已通过。它们只验证流程和数据合同，不代表策略已训练成功。
 

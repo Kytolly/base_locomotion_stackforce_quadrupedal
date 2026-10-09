@@ -39,6 +39,18 @@ def test_training_dotlist_override_is_resolved() -> None:
     assert config.wandb.mode == "offline"
 
 
+def test_training_yaml_inheritance_is_resolved() -> None:
+    config = load_config(PROJECT_ROOT / "configs/train/main/b2_bisec_full.yaml")
+
+    validate_training_config(config)
+
+    assert config.env.terrain_profile == "union_foundation"
+    assert config.agent.actor.architecture == "sparse_moe"
+    assert config.agent.actor.reflex_enabled is True
+    assert config.agent.algorithm.gate_entropy_coef == 0.03
+    assert "extends" not in config
+
+
 def test_resume_requires_exact_run_and_checkpoint() -> None:
     config_path = PROJECT_ROOT / "configs/train/base_locomotion_complex.yaml"
     missing = load_config(config_path, ("agent.resume=true",))

@@ -1,0 +1,11 @@
+extends: ../main/b0_t1_ppo.yaml
+
+agent:
+  run_name: a4_ppo_total_capacity_foundation_seed${env.seed}
+  actor:
+    hidden_dims: [360, 360]
+  critic:
+    hidden_dims: [360, 360]
+
+wandb:
+  group: e0-a4-ppo-total-capacity

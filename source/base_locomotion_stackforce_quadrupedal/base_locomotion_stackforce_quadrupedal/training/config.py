@@ -9,9 +9,11 @@ from typing import Any
 from omegaconf import DictConfig, OmegaConf
 
 
-def load_config(path: str | Path, overrides: Sequence[str] = ()) -> DictConfig:
-    """Load one YAML file and merge OmegaConf dotlist overrides."""
-    config_path = Path(path).expanduser().resolve()
+def _load_config_tree(config_path: Path, ancestry: tuple[Path, ...] = ()) -> DictConfig:
+    config_path = config_path.expanduser().resolve()
+    if config_path in ancestry:
+        cycle = " -> ".join(str(path) for path in (*ancestry, config_path))
+        raise ValueError(f"Configuration inheritance cycle: {cycle}")
     if not config_path.is_file():
         raise FileNotFoundError(config_path)
     config = OmegaConf.load(config_path)
@@ -19,6 +21,22 @@ def load_config(path: str | Path, overrides: Sequence[str] = ()) -> DictConfig:
         raise TypeError(
             f"Expected a mapping at {config_path}, received {type(config).__name__}."
         )
+    parent = config.pop("extends", None)
+    if parent is None:
+        return config
+    if not isinstance(parent, str) or not parent.strip():
+        raise TypeError(f"extends must be one non-empty path in {config_path}.")
+    parent_path = (config_path.parent / parent).expanduser().resolve()
+    return OmegaConf.merge(
+        _load_config_tree(parent_path, (*ancestry, config_path)),
+        config,
+    )
+
+
+def load_config(path: str | Path, overrides: Sequence[str] = ()) -> DictConfig:
+    """Load one YAML config, its optional parent, and dotlist overrides."""
+    config_path = Path(path).expanduser().resolve()
+    config = _load_config_tree(config_path)
     if overrides:
         config = OmegaConf.merge(config, OmegaConf.from_dotlist(list(overrides)))
     OmegaConf.resolve(config)

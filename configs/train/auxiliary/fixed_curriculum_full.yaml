@@ -1,0 +1,12 @@
+extends: ../main/b2_bisec_full.yaml
+
+curriculum:
+  terrain_levels: null
+  motion_family: null
+  robustness_bin: null
+
+agent:
+  run_name: fixed_curriculum_full_foundation_seed${env.seed}
+
+wandb:
+  group: e0-fixed-curriculum-full

@@ -19,7 +19,7 @@
 | 地形 | `env/terrains/complex.py`、`mdp/curricula/` | 8 类等比例，初始等级限于 0-1；episode 的 command-aligned progress、tracking/yaw RMSE 与终止结果驱动升降级，difficulty 0.0-0.6 |
 | 接触与安全 | `ComplexSceneCfg`、`mdp/support.py`、`mdp/terminations.py` | 四轮接触、机身碰撞、支撑有效性指标；相对支撑高度、过度倾斜和机身接触终止已配置，接触阈值仍需物理资格验收 |
 | Domain randomization | `EventCfg`、`ObservationsCfg` | 摩擦、基座质量、执行器增益采用窄范围启动随机化；本体传感项有小幅噪声；延迟未随机化，需先完成 actuator 时序标定 |
-| 训练配置 | `configs/train/base_locomotion_e0_46d.yaml`、`scripts/rsl_rl/train.py` | E0 为 4096 环境、24 steps/env、20000 iterations，默认无 GUI |
+| 训练配置 | `configs/train/main/b2_bisec_full.yaml`、`scripts/rsl_rl/train.py` | E0 为 4096 环境、24 steps/env、四阶段共 20000 iterations，默认无 GUI |
 | 自定义日志 | `evaluation/metric/logging.py` 与训练入口 | 推荐 core/safety/runtime；入口当前二次解析配置，扩展组和 enabled 覆盖会回退默认值 |
 | W&B | E0 YAML 与 RSL-RL logger | 当前工作区 YAML 为 enabled/online；正式命令仍显式传参并记录 run id |
 | 运行日志 | `scripts/rsl_rl/train*.py` | 运行目录写入 `logs/rsl_rl/<experiment>/<run>` |

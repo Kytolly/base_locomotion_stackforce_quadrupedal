@@ -1,0 +1,9 @@
+extends: ../main/b2_bisec_full.yaml
+
+agent:
+  run_name: p0_no_privileged_full_foundation_seed${env.seed}
+  obs_groups:
+    critic: [policy]
+
+wandb:
+  group: e0-p0-no-privileged-full

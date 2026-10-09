@@ -1,0 +1,7 @@
+extends: ../base_locomotion_e0_46d.yaml
+
+agent:
+  run_name: b0_t1_ppo_foundation_seed${env.seed}
+
+wandb:
+  group: e0-b0-t1-ppo

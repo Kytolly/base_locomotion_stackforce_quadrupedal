@@ -1,0 +1,9 @@
+extends: ../main/b2_bisec_full.yaml
+
+agent:
+  run_name: a3_minus_ent_foundation_seed${env.seed}
+  algorithm:
+    gate_entropy_coef: 0.0
+
+wandb:
+  group: e0-a3-minus-ent

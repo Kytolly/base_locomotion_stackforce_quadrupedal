@@ -17,31 +17,29 @@ source/     Isaac Lab 扩展与任务实现
 
 ## 配置与启动
 
-主线为 `configs/train/base_locomotion_e0_46d.yaml`：46D Actor、62D Critic、4096 环境、24 steps/env、20000 iterations。E0 显示默认值是 `launcher.viz: none`；当前工作区 YAML 设置 `wandb.enabled: true`、`wandb.mode: online`。命令显式写出关键覆盖，避免依赖本地 YAML 改动。
+共享合同为 `configs/train/base_locomotion_e0_46d.yaml`：46D Actor、62D Critic、4096 环境和 24 steps/env。可执行实验按 `configs/train/main/` 与 `configs/train/auxiliary/` 分开；主目录仅包含 B0、B1、B2-A 和 B2-B。每个实验 YAML 固定网络、损失与 W&B group，命令行只覆盖 seed、训练阶段和精确恢复路径。
 
 配置检查不启动 Isaac Sim：
 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml --validate-config
+  --config configs/train/main/b2_bisec_full.yaml --validate-config
 ```
 
 短测只验证管线，不证明策略性能：
 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml \
+  --config configs/train/main/b2_bisec_full.yaml \
   launcher.viz=none env.num_envs=128 agent.max_iterations=1 \
   agent.run_name=e0_46d_smoke wandb.enabled=false
 ```
 
-完整长训练命令（20000 iterations，须由运行者主动启动）：
+Foundation 阶段训练命令：
 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml \
-  launcher.viz=none wandb.enabled=true wandb.mode=online \
-  env.seed=42 agent.run_name=e0_46d_seed42
+  --config configs/train/main/b2_bisec_full.yaml
 ```
 
 GUI 可覆盖 `launcher.viz=kit launcher.max_visible_envs=16`；可见环境数量不减少 `env.num_envs`，也不减少物理 rollout。离线记录须同时设置 `wandb.enabled=true wandb.mode=offline`。各独立 seed 使用独立 run name；不要从旧 V0 或不同动作分布的 checkpoint 恢复 E0，恢复时须核对环境与分布合同。
@@ -50,7 +48,7 @@ W&B 项目为 `stackforce-quadrupedal-locomotion`，E0 group 为 `e0-46d`。建�
 
 ## 日志开关与当前限制
 
-推荐仅开启 `core`、`safety`、`runtime`。下面是精简配置建议，不是当前工作区 YAML 的逐字快照（当前文件全部组为 true）：
+正式训练开启全部自定义指标组和全部 W&B 面板组：
 
 ```yaml
 logging:
@@ -60,29 +58,29 @@ logging:
       core: true
       safety: true
       runtime: true
-      command: false
-      support: false
-      actuation: false
-      terrain: false
-      motion: false
-      reward: false
+      command: true
+      support: true
+      actuation: true
+      terrain: true
+      motion: true
+      reward: true
   wandb_panels:
     enabled: true
     groups:
       core: true
       safety: true
       runtime: true
-      command: false
-      support: false
-      actuation: false
-      terrain: false
-      motion: false
-      reward: false
+      command: true
+      support: true
+      actuation: true
+      terrain: true
+      motion: true
+      reward: true
 ```
 
 设计合同是：`metrics` 控制逐步采集和 episode 聚合，`wandb_panels` 控制自定义指标写入日志后端（W&B/TensorBoard），不是直接删除 W&B 网页上的现有面板。采集开启、面板关闭可以用于只保留诊断数据；`enabled=false` 设计上关闭对应全部组。RSL-RL 内建 reward、episode length、loss、KL、timing 等标量不受这两个自定义组开关控制。
 
-**已知实现限制：** 两个训练入口先调用 `resolve_metric_logging_config`，`TrainingMetricsWrapper` 又对其结果解析一次；解析器期待原始 `metrics/wandb_panels` 结构，而第一次结果为 `metric_groups/panel_groups`。因此通过这两个入口设置的自定义组和 `enabled` 覆盖会回退到解析器默认值（core/safety/runtime 开启，扩展组关闭）。不能把 YAML 设置为 true 当作扩展指标已生效的证据。此问题需要代码修复及入口集成测试；健康度指标及诊断组对应关系见 [TRAINING_HEALTH_METRICS.md](TRAINING_HEALTH_METRICS.md)。
+两个训练入口都把原始 `logging` 配置交给 `TrainingMetricsWrapper` 解析一次，因此 YAML 中的九个指标组和九个面板组会按配置生效。健康度指标及诊断组对应关系见 [TRAINING_HEALTH_METRICS.md](TRAINING_HEALTH_METRICS.md)。
 
 ## 注册、评估与导出
 

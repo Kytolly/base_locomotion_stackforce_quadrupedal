@@ -1,0 +1,11 @@
+extends: b2_moe_reflex.yaml
+
+agent:
+  run_name: b2_bisec_full_foundation_seed${env.seed}
+  algorithm:
+    gate_entropy_coef: 0.03
+    expert_orthogonality_coef: 0.03
+    temporal_consistency_coef: 0.01
+
+wandb:
+  group: e0-b2-bisec-full

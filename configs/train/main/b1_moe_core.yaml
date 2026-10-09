@@ -1,0 +1,11 @@
+extends: b0_t1_ppo.yaml
+
+agent:
+  run_name: b1_moe_core_foundation_seed${env.seed}
+  actor:
+    architecture: sparse_moe
+  critic:
+    architecture: sparse_moe
+
+wandb:
+  group: e0-b1-moe-core

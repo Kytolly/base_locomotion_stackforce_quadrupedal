@@ -1,0 +1,9 @@
+extends: b1_moe_core.yaml
+
+agent:
+  run_name: b2_moe_reflex_foundation_seed${env.seed}
+  actor:
+    reflex_enabled: true
+
+wandb:
+  group: e0-b2-moe-reflex

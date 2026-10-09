@@ -1,0 +1,9 @@
+extends: ../main/b0_t1_ppo.yaml
+
+agent:
+  run_name: p0_no_privileged_t1_foundation_seed${env.seed}
+  obs_groups:
+    critic: [policy]
+
+wandb:
+  group: e0-p0-no-privileged-t1

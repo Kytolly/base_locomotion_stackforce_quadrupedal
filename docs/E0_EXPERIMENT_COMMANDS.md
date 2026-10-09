@@ -1,12 +1,32 @@
-# E0 experiment commands
+# E0 experiment configurations
 
-The experiment matrix is the source of truth for B0–B3 training, observation controls, fixed-curriculum controls, and the regularizer sweep:
+Each registered experiment has one directly executable training configuration:
 
+- main experiments: `configs/train/main/`
+- auxiliary experiments: `configs/train/auxiliary/`
 - matrix: `configs/experiments/e0_experiments.yaml`
 - command generator: `scripts/e0_experiment_commands.py`
-- base contract: `configs/train/base_locomotion_e0_46d.yaml`
+- shared contract: `configs/train/base_locomotion_e0_46d.yaml`
 
 Run commands from the repository root with the Isaac Lab Python environment.
+
+The main directory contains only B0, B1, B2-A, and B2-B. Ablations,
+capacity controls, observation controls, and fixed-curriculum controls live in
+the auxiliary directory. The shared contract enables every custom metric group
+and every W&B panel group.
+
+## Direct training
+
+Start the B2-B foundation stage without architecture overrides:
+
+```bash
+conda activate env_isaaclab
+python scripts/rsl_rl/train.py \
+  --config configs/train/main/b2_bisec_full.yaml
+```
+
+Use another YAML path to select another experiment. Command-line overrides are
+reserved for stage progression, seed selection, resume paths, and diagnostics.
 
 ## Inspect the matrix
 
@@ -27,7 +47,7 @@ The common 20,000-iteration budget is split into foundation 1,000, expansion 5,0
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/e0_experiment_commands.py \
   --experiment b2_bisec_full --seed 42 --stage expansion \
   --load-run 2026-10-09_20-00-00_b2_bisec_full_foundation_seed42 \
-  --load-checkpoint model_1000.pt
+  --load-checkpoint model_999.pt
 ```
 
 The generator enables the controlled terrain-stage resume flag for non-foundation stages. That flag permits only terrain profile/proportion changes. A change to observations, actions, rewards, commands, curriculum terms, PPO, or network structure still fails the checkpoint contract.

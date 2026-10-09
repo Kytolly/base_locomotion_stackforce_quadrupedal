@@ -82,7 +82,7 @@ Isaac Sim 运行时合同：
 
 ## Training Metrics 与 Validation
 
-训练入口在 RSL-RL wrapper 前接入 `TrainingMetricsWrapper`。每个结束 episode 的已启用指标写入 `extras["log"]`，交给 RSL-RL 的 TensorBoard/W&B logger。下列为完整指标目录，不是默认显示项；推荐 core/safety/runtime 与当前开关二次解析限制见 [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md)：
+训练入口在 RSL-RL wrapper 前接入 `TrainingMetricsWrapper`。每个结束 episode 的已启用指标写入 `extras["log"]`，交给 RSL-RL 的 TensorBoard/W&B logger。正式实验启用下列全部指标组；开关合同见 [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md)：
 
 - `train/locomotion/*`：四轴 RMSE、实际速度/高度均值、前向位移；
 - `train/safety/*`：非 timeout 终止、timeout、base-height failure、姿态 mean/RMS/P95；

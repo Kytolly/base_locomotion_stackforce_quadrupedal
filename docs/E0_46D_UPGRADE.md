@@ -36,7 +36,7 @@ Configuration-only validation, which does not start Isaac Sim:
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python \
   scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml \
+  --config configs/train/main/b2_bisec_full.yaml \
   --validate-config
 ```
 
@@ -45,7 +45,7 @@ For a short run, use:
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python \
   scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml \
+  --config configs/train/main/b2_bisec_full.yaml \
   launcher.viz=none \
   env.num_envs=128 \
   agent.max_iterations=1 \
@@ -61,7 +61,7 @@ The command below starts the full 20k-iteration E0 run. It is intentionally not 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python \
   scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml \
+  --config configs/train/main/b2_bisec_full.yaml \
   launcher.viz=none \
   wandb.enabled=true \
   wandb.mode=online

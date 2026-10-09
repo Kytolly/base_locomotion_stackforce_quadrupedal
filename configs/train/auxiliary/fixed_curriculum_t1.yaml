@@ -1,0 +1,12 @@
+extends: ../main/b0_t1_ppo.yaml
+
+curriculum:
+  terrain_levels: null
+  motion_family: null
+  robustness_bin: null
+
+agent:
+  run_name: fixed_curriculum_t1_foundation_seed${env.seed}
+
+wandb:
+  group: e0-fixed-curriculum-t1

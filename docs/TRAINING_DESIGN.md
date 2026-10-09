@@ -4,7 +4,7 @@
 
 ## 目标与信息边界
 
-主线配置为 `configs/train/base_locomotion_e0_46d.yaml`，注册任务为 `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0`。目标是在不同地形上跟踪机身运动意图，保持稳定，并输出可控的轮腿执行器目标；不是给策略指定 gait 或腿序。
+最终主模型配置为 `configs/train/main/b2_bisec_full.yaml`，注册任务为 `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0`。目标是在不同地形上跟踪机身运动意图，保持稳定，并输出可控的轮腿执行器目标；不是给策略指定 gait 或腿序。
 
 ```text
 4D command + 30D 本体状态 + 12D 上一动作
@@ -32,7 +32,7 @@ Actor 不读取地形扫描、接触标志、足端状态或机身线速度真�
 | 学习率 | 0.001，adaptive，desired KL=0.01 |
 | 折扣 / GAE | gamma=0.99，lambda=0.95 |
 
-运行时用随机 episode 初始长度分散 reset。`launcher.viz=none` 是 E0 YAML 的显示默认值；当前工作区 YAML 的 W&B 为 online 且 enabled=true。推荐精简日志与当前解析限制见实验协议，不应仅根据 YAML 声称所有扩展组已生效。
+运行时用随机 episode 初始长度分散 reset。`launcher.viz=none` 是 E0 YAML 的显示默认值；W&B 为 online 且 enabled=true。正式实验开启全部自定义指标和面板组。
 
 ## 地形与课程
 

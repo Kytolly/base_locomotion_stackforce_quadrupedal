@@ -13,7 +13,7 @@ launcher:
 env:
   num_envs: 4096
   seed: 42
-  terrain_profile: union_expansion
+  terrain_profile: union_foundation
   sim_dt: 0.005
   decimation: 4
   render_interval: 4
@@ -41,7 +41,7 @@ curriculum:
 
 agent:
   num_steps_per_env: 24
-  max_iterations: 20000
+  max_iterations: 1000
   save_interval: 250
   experiment_name: base_locomotion_e0_46d
   run_name: e0_46d_seed42
@@ -98,11 +98,11 @@ runtime:
 
 logging:
   metrics:
-    enabled: true #
+    enabled: true
     groups:
-      core: true #
-      safety: true #
-      runtime: true #
+      core: true
+      safety: true
+      runtime: true
       command: true
       support: true
       actuation: true

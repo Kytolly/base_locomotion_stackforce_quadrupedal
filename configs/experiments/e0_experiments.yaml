@@ -1,5 +1,4 @@
 schema_version: 1
-base_config: configs/train/base_locomotion_e0_46d.yaml
 seeds: [42, 43, 44]
 terrain_stages:
   foundation: {profile: union_foundation, iterations: 1000}
@@ -10,111 +9,64 @@ terrain_stages:
 experiments:
   b0_t1_ppo:
     batch: B0
-    overrides: {}
+    config: configs/train/main/b0_t1_ppo.yaml
   b1_moe_core:
     batch: B1
-    overrides:
-      agent.actor.architecture: sparse_moe
-      agent.critic.architecture: sparse_moe
+    config: configs/train/main/b1_moe_core.yaml
   b2_moe_reflex:
     batch: B2-A
-    overrides:
-      agent.actor.architecture: sparse_moe
-      agent.actor.reflex_enabled: true
-      agent.critic.architecture: sparse_moe
+    config: configs/train/main/b2_moe_reflex.yaml
   b2_bisec_full:
     batch: B2-B
-    overrides:
-      agent.actor.architecture: sparse_moe
-      agent.actor.reflex_enabled: true
-      agent.critic.architecture: sparse_moe
-      agent.algorithm.gate_entropy_coef: 0.03
-      agent.algorithm.expert_orthogonality_coef: 0.03
-      agent.algorithm.temporal_consistency_coef: 0.01
+    config: configs/train/main/b2_bisec_full.yaml
   a3_minus_ent:
     batch: B3
-    parent: b2_bisec_full
-    overrides: {agent.algorithm.gate_entropy_coef: 0.0}
+    config: configs/train/auxiliary/a3_minus_ent.yaml
   a3_minus_ortho:
     batch: B3
-    parent: b2_bisec_full
-    overrides: {agent.algorithm.expert_orthogonality_coef: 0.0}
+    config: configs/train/auxiliary/a3_minus_ortho.yaml
   a3_minus_temp:
     batch: B3
-    parent: b2_bisec_full
-    overrides: {agent.algorithm.temporal_consistency_coef: 0.0}
+    config: configs/train/auxiliary/a3_minus_temp.yaml
   a4_ppo_total_capacity:
     batch: B3
-    overrides:
-      agent.actor.hidden_dims: [360, 360]
-      agent.critic.hidden_dims: [360, 360]
+    config: configs/train/auxiliary/a4_ppo_total_capacity.yaml
   a4_ppo_active_capacity:
     batch: B3
-    overrides:
-      agent.actor.hidden_dims: [208, 208]
-      agent.critic.hidden_dims: [208, 208]
+    config: configs/train/auxiliary/a4_ppo_active_capacity.yaml
   p0_no_privileged_t1:
     batch: B3
-    overrides: {agent.obs_groups.critic: [policy]}
+    config: configs/train/auxiliary/p0_no_privileged_t1.yaml
   p0_no_privileged_full:
     batch: B3
-    parent: b2_bisec_full
-    overrides: {agent.obs_groups.critic: [policy]}
+    config: configs/train/auxiliary/p0_no_privileged_full.yaml
   p1_history_t1:
     batch: B3
-    overrides:
-      task: Base-Locomotion-Stackforce-Quadrupedal-History-v0
-      protocol_version: E0-v1-P1-history
-      actor_observation_dim: 184
+    config: configs/train/auxiliary/p1_history_t1.yaml
   p1_history_full:
     batch: B3
-    parent: b2_bisec_full
-    overrides:
-      task: Base-Locomotion-Stackforce-Quadrupedal-History-v0
-      protocol_version: E0-v1-P1-history
-      actor_observation_dim: 184
+    config: configs/train/auxiliary/p1_history_full.yaml
   p2_terrain_t1:
     batch: B3
-    overrides:
-      task: Base-Locomotion-Stackforce-Quadrupedal-Terrain-v0
-      protocol_version: E0-v1-P2-terrain
-      actor_observation_dim: 76
+    config: configs/train/auxiliary/p2_terrain_t1.yaml
   p2_terrain_full:
     batch: B3
-    parent: b2_bisec_full
-    overrides:
-      task: Base-Locomotion-Stackforce-Quadrupedal-Terrain-v0
-      protocol_version: E0-v1-P2-terrain
-      actor_observation_dim: 76
+    config: configs/train/auxiliary/p2_terrain_full.yaml
   p3_history_terrain_t1:
     batch: B3
-    overrides:
-      task: Base-Locomotion-Stackforce-Quadrupedal-History-Terrain-v0
-      protocol_version: E0-v1-P3-history-terrain
-      actor_observation_dim: 304
+    config: configs/train/auxiliary/p3_history_terrain_t1.yaml
   p3_history_terrain_full:
     batch: B3
-    parent: b2_bisec_full
-    overrides:
-      task: Base-Locomotion-Stackforce-Quadrupedal-History-Terrain-v0
-      protocol_version: E0-v1-P3-history-terrain
-      actor_observation_dim: 304
+    config: configs/train/auxiliary/p3_history_terrain_full.yaml
   fixed_curriculum_t1:
     batch: B3
-    overrides:
-      curriculum.terrain_levels: null
-      curriculum.motion_family: null
-      curriculum.robustness_bin: null
+    config: configs/train/auxiliary/fixed_curriculum_t1.yaml
   fixed_curriculum_full:
     batch: B3
-    parent: b2_bisec_full
-    overrides:
-      curriculum.terrain_levels: null
-      curriculum.motion_family: null
-      curriculum.robustness_bin: null
+    config: configs/train/auxiliary/fixed_curriculum_full.yaml
 
 regularizer_sweep:
-  parent: b2_moe_reflex
+  base_config: configs/train/main/b2_moe_reflex.yaml
   gate_entropy_coef: [0.0, 0.01, 0.03, 0.05]
   expert_orthogonality_coef: [0.0, 0.01, 0.03, 0.05]
   temporal_consistency_coef: [0.0, 0.01]

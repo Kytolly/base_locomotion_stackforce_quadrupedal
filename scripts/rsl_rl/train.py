@@ -63,13 +63,22 @@ DEFAULT_CONFIG = PROJECT_ROOT / "configs/train/base_locomotion_complex.yaml"
 ISAACLAB_PYTHON = Path("/home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python")
 
 
+def _load_training_config_module():
+    config_module_path = PROJECT_ROOT / (
+        "source/base_locomotion_stackforce_quadrupedal/"
+        "base_locomotion_stackforce_quadrupedal/training/config.py"
+    )
+    config_spec = importlib.util.spec_from_file_location("_training_config", config_module_path)
+    if config_spec is None or config_spec.loader is None:
+        raise RuntimeError(f"Unable to load training config helpers from {config_module_path}.")
+    config_module = importlib.util.module_from_spec(config_spec)
+    config_spec.loader.exec_module(config_module)
+    return config_module
+
+
 def _load_yaml_config(path: Path, overrides: list[str]):
     """Load the launcher contract before importing task modules into Kit."""
-    config = OmegaConf.load(path.expanduser().resolve())
-    if overrides:
-        config = OmegaConf.merge(config, OmegaConf.from_dotlist(overrides))
-    OmegaConf.resolve(config)
-    return config
+    return _load_training_config_module().load_config(path, overrides)
 
 
 def _launcher_kwargs(config) -> dict[str, object]:
@@ -162,16 +171,7 @@ def main() -> None:
     if args.validate_config:
         # The YAML contract can be checked without importing the task package;
         # importing it would initialize every Isaac Lab task and require Kit.
-        config_module_path = PROJECT_ROOT / (
-            "source/base_locomotion_stackforce_quadrupedal/"
-            "base_locomotion_stackforce_quadrupedal/training/config.py"
-        )
-        config_spec = importlib.util.spec_from_file_location("_training_config", config_module_path)
-        if config_spec is None or config_spec.loader is None:
-            raise RuntimeError(f"Unable to load training config helpers from {config_module_path}.")
-        config_module = importlib.util.module_from_spec(config_spec)
-        config_spec.loader.exec_module(config_module)
-        validate_training_config = config_module.validate_training_config
+        validate_training_config = _load_training_config_module().validate_training_config
 
         validate_training_config(config)
         print(OmegaConf.to_yaml(config, resolve=True))
@@ -207,9 +207,6 @@ def main() -> None:
     import base_locomotion_stackforce_quadrupedal.tasks  # noqa: F401
     from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric import (
         TrainingMetricsWrapper,
-    )
-    from base_locomotion_stackforce_quadrupedal.evaluation.metric.logging import (
-        resolve_metric_logging_config,
     )
     from base_locomotion_stackforce_quadrupedal.training.checkpoint import (
         build_training_contract,
@@ -292,8 +289,7 @@ def main() -> None:
                 video_length=int(config.video.length),
                 disable_logger=True,
             )
-        logging_config = resolve_metric_logging_config(config.get("logging", {}))
-        env = TrainingMetricsWrapper(env, logging_config)
+        env = TrainingMetricsWrapper(env, config.get("logging", {}))
         vec_env = RslRlVecEnvWrapper(env, clip_actions=float(agent_cfg.clip_actions))
         print(f"[TRAIN] observation_space={vec_env.observation_space} action_space={vec_env.action_space}", flush=True)
         runner = OnPolicyRunner(

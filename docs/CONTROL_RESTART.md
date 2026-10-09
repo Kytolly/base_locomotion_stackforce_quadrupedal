@@ -24,7 +24,7 @@
 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
-  --config configs/train/base_locomotion_e0_46d.yaml \
+  --config configs/train/main/b2_bisec_full.yaml \
   launcher.viz=none env.num_envs=128 agent.max_iterations=1 \
   agent.run_name=e0_46d_control_smoke wandb.enabled=false
 ```
