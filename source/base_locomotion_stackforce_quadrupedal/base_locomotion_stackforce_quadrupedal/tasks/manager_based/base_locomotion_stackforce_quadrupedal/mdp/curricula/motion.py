@@ -25,23 +25,27 @@ def motion_family_rehearsal(
     The sampler remains a single 46D command stream. This term only changes
     family probabilities and records coverage; it never adds an observation.
     """
-    history = getattr(env, "motion_history", None)
     command_term = env.command_manager.get_term("locomotion")
-    family = getattr(command_term, "motion_family", None)
-    if history is None or family is None:
+    finish_segments = getattr(command_term, "finish_episode_motion_segments", None)
+    if finish_segments is None:
         return torch.zeros((), device=env.device)
 
     if not hasattr(env, "motion_family_stats"):
         env.motion_family_stats = torch.zeros((MOTION_FAMILY_COUNT, 3), device=env.device)
-    family = family.to(dtype=torch.long)
-    completed = history[env_ids, 4] > 0
-    tracking = torch.sqrt(
-        history[env_ids, 2] / history[env_ids, 4].clamp_min(1.0)
-    )
-    yaw = torch.sqrt(history[env_ids, 3] / history[env_ids, 4].clamp_min(1.0))
     terminated = getattr(env, "reset_terminated", torch.zeros_like(env.episode_length_buf))[env_ids]
-    success = completed & ~terminated & (tracking <= success_tracking_rmse) & (yaw <= success_yaw_rmse)
-    selected = family[env_ids].clamp(0, MOTION_FAMILY_COUNT - 1)
+    segments = finish_segments(env_ids, terminated)
+    if not segments:
+        return torch.zeros((), device=env.device)
+    steps = segments["steps"].float().clamp_min(1.0)
+    tracking = torch.sqrt(segments["tracking_error_sq"] / steps)
+    yaw = torch.sqrt(segments["yaw_error_sq"] / steps)
+    success = (
+        segments["command_completed"]
+        & ~segments["terminated"]
+        & (tracking <= success_tracking_rmse)
+        & (yaw <= success_yaw_rmse)
+    )
+    selected = segments["family"].clamp(0, MOTION_FAMILY_COUNT - 1)
     for index in range(MOTION_FAMILY_COUNT):
         mask = selected == index
         env.motion_family_stats[index, 0] += mask.float().sum()

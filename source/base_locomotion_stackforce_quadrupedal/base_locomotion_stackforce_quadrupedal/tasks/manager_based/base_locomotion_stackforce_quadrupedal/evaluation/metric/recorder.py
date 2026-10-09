@@ -22,6 +22,13 @@ class LocomotionStepRecorder(RecorderTerm):
         env.motion_history[:, 2] += (velocity - command[:, :2]).square().sum(-1)
         env.motion_history[:, 3] += (robot.data.root_ang_vel_b[:, 2] - command[:, 2]).square()
         env.motion_history[:, 4] += 1
+        command_term = env.command_manager.get_term("locomotion")
+        record_motion_step = getattr(command_term, "record_motion_step", None)
+        if record_motion_step is not None:
+            record_motion_step(
+                (velocity - command[:, :2]).square().sum(-1),
+                (robot.data.root_ang_vel_b[:, 2] - command[:, 2]).square(),
+            )
         for callback in getattr(env, "post_physics_callbacks", ()):
             callback()
         return None, None

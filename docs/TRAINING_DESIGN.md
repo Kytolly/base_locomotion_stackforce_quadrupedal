@@ -52,4 +52,4 @@ Command 每 10 s 重采样，并限速整形；前后、横移、原地转向、
 
 基础随机化包括摩擦、机身质量约 ±10%、执行器增益约 ±10% 及本体观测噪声。当前不包含完整的延迟、零偏、轮半径等随机化合同，也不等于完成真机执行器标定。
 
-46D 策略可以通过本体反馈学习轮腿协同，但没有前视地形输入，不能据此声称已学会 stepping 或复杂越障。训练 reward 上升不等于验收通过；需冻结 checkpoint，完成五 command、八地形及 Plateau/Washboard 验证。108D [Hybrid 方案](HYBRID_LOCOMOTION_SOLUTION.md) 与此主线独立，不是当前 E0 的输入升级。
+46D 策略可以通过本体反馈学习轮腿协同，但没有前视地形输入，不能据此声称已学会 stepping 或复杂越障。训练 reward 上升不等于验收通过；需冻结 checkpoint，完成固定 command suite、全部 11 类地形、连续混合有序路线及 Plateau/Washboard 验证。108D [Hybrid 方案](HYBRID_LOCOMOTION_SOLUTION.md) 与此主线独立，不是当前 E0 的输入升级。

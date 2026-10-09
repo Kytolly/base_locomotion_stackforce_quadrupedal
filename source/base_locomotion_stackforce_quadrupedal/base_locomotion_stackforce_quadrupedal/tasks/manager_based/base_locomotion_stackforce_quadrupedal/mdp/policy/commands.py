@@ -73,6 +73,10 @@ class LocomotionCommand(CommandTerm):
         self._temporal_loss_grace = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device
         )
+        self._segment_tracking_error_sq = torch.zeros(self.num_envs, device=self.device)
+        self._segment_yaw_error_sq = torch.zeros(self.num_envs, device=self.device)
+        self._segment_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._completed_motion_segments: list[dict[str, torch.Tensor]] = []
         self._sampling_probabilities = torch.tensor(
             cfg.mode_probabilities, dtype=torch.float32, device=self.device
         )
@@ -140,6 +144,71 @@ class LocomotionCommand(CommandTerm):
         probabilities = probabilities.clamp_min(floor)
         self._sampling_probabilities = probabilities / probabilities.sum()
 
+    def record_motion_step(
+        self, tracking_error_sq: torch.Tensor, yaw_error_sq: torch.Tensor
+    ) -> None:
+        """Accumulate errors against the family that executed this control step."""
+        valid = self._motion_family >= 0
+        self._segment_tracking_error_sq[valid] += tracking_error_sq[valid]
+        self._segment_yaw_error_sq[valid] += yaw_error_sq[valid]
+        self._segment_steps[valid] += 1
+
+    def _finalize_motion_segments(
+        self,
+        env_ids: torch.Tensor,
+        *,
+        terminated: torch.Tensor,
+        command_completed: torch.Tensor,
+    ) -> None:
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        valid = (self._motion_family[env_ids] >= 0) & (self._segment_steps[env_ids] > 0)
+        if bool(valid.any()):
+            selected = env_ids[valid]
+            self._completed_motion_segments.append(
+                {
+                    "env_id": selected.clone(),
+                    "family": self._motion_family[selected].clone(),
+                    "tracking_error_sq": self._segment_tracking_error_sq[selected].clone(),
+                    "yaw_error_sq": self._segment_yaw_error_sq[selected].clone(),
+                    "steps": self._segment_steps[selected].clone(),
+                    "terminated": terminated[valid].clone(),
+                    "command_completed": command_completed[valid].clone(),
+                }
+            )
+        self._segment_tracking_error_sq[env_ids] = 0.0
+        self._segment_yaw_error_sq[env_ids] = 0.0
+        self._segment_steps[env_ids] = 0
+
+    def finish_episode_motion_segments(
+        self, env_ids: Sequence[int], terminated: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Finalize the active partial segment and drain records for reset environments."""
+        env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        expected_steps = max(
+            1,
+            round(float(self.cfg.resampling_time_range[0]) / float(self._env.step_dt)),
+        )
+        active_complete = self._segment_steps[env_ids] >= expected_steps
+        self._finalize_motion_segments(
+            env_ids,
+            terminated=terminated.to(device=self.device, dtype=torch.bool),
+            command_completed=active_complete,
+        )
+
+        drained: dict[str, list[torch.Tensor]] = {}
+        remaining: list[dict[str, torch.Tensor]] = []
+        for record in self._completed_motion_segments:
+            selected = torch.isin(record["env_id"], env_ids)
+            if bool(selected.any()):
+                for name, values in record.items():
+                    drained.setdefault(name, []).append(values[selected])
+            if bool((~selected).any()):
+                remaining.append({name: values[~selected] for name, values in record.items()})
+        self._completed_motion_segments = remaining
+        return {
+            name: torch.cat(values) for name, values in drained.items()
+        }
+
     def set_command(
         self, command: torch.Tensor, env_ids: Sequence[int] | None = None
     ) -> None:
@@ -174,6 +243,12 @@ class LocomotionCommand(CommandTerm):
         return extras
 
     def _resample_command(self, env_ids: Sequence[int]) -> None:
+        env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        self._finalize_motion_segments(
+            env_ids_tensor,
+            terminated=torch.zeros(len(env_ids_tensor), dtype=torch.bool, device=self.device),
+            command_completed=torch.ones(len(env_ids_tensor), dtype=torch.bool, device=self.device),
+        )
         count = len(env_ids)
 
         def sample(bounds: tuple[float, float]) -> torch.Tensor:

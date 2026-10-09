@@ -19,7 +19,9 @@ Until these gates pass, friction, actuator, and collision parameters remain qual
 
 ## Frozen policy thresholds
 
-The following initial acceptance thresholds are enforced by `scripts/validate_policy.py` report generation. Every one of the five command scenarios and every terrain family must pass. All episodes must finish (timeout or measured unsafe termination); timeout survival must be at least 95% in every family. Validation freezes curriculum, uses all eight levels with at least 64 environments (a multiple of 64), and runs each scenario for 30 seconds. A shorter smoke or a single-level diagnostic cannot produce performance PASS.
+The following initial acceptance thresholds are enforced by `scripts/validate_policy.py` report generation. Every fixed command scenario and all 11 terrain families must pass, including `flat` and `continuous_mixed`. The command suite covers stop, forward/backward, bilateral lateral motion, yaw in both directions, forward/backward compound turns, and low/high body-height targets. All episodes must finish (timeout or measured unsafe termination); timeout survival must be at least 95% in every family. Validation freezes curriculum, deterministically assigns every terrain family, uses all eight levels with at least 64 environments (a multiple of 64), and runs each scenario for 30 seconds. A shorter smoke or a single-level diagnostic cannot produce performance PASS.
+
+The forward scenario additionally gates `continuous_mixed` on three ordered route checkpoints (entry, interior, and exit/recovery) while remaining inside the route corridor. Survival and velocity tracking alone cannot satisfy this gate.
 
 | Metric | PASS threshold |
 | --- | ---: |
@@ -39,4 +41,4 @@ Plateau and Washboard require the same numerical gates, a complete timeout episo
 
 ## Evidence status
 
-These are conservative initial project gates, not a claim that an existing checkpoint has passed. A final policy PASS requires the physical qualification gates, a recorded long-run PPO experiment with its configuration and W&B run, the full five-command/eight-terrain validation, and both repeated benchmark suites. The report distinguishes structural eligibility from `performance_pass`.
+These are conservative initial project gates, not a claim that an existing checkpoint has passed. A final policy PASS requires the physical qualification gates, a recorded long-run PPO experiment with its configuration and W&B run, the full fixed-command/11-terrain validation, and both repeated benchmark suites. The report distinguishes structural eligibility from `performance_pass`; an untrained policy is not required to meet performance thresholds before training starts.

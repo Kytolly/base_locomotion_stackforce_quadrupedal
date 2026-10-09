@@ -36,7 +36,7 @@
 | G4 地形 | 八类程序化地形、难度和局部支撑估计 | 轮接触/射线可用率、轮支撑比例、机身碰撞率和终止原因可按 terrain 记录；接触阈值及 slope/obstacle 物理表现需验收 | W&B + `output/evaluation/` |
 | G5 奖励与指标 | 跟踪、稳定、动作率、限位、饱和、机械功和 reward 分解 | 九组实写通过短测；测量的物理资格与策略性能仍需验收 | W&B + `logs/` |
 | G6 PPO smoke | E0 YAML、固定 seed、短 rollout、有限值检查 | 短训练管线已有有限值运行证据；同合同恢复和长期训练仍待验证，历史 smoke 不等于 E0 性能 PASS | `logs/`、运行目录配置快照 |
-| G7 验证与导出 | 固定五 command、八类 terrain、Plateau/Washboard、checkpoint 选择 | Plateau/Washboard 依序通过障碍检查点、保持赛道走廊、无不安全终止并完整结束 episode；性能阈值按 `docs/ACCEPTANCE_CRITERIA.md` 判定，尚无策略 PASS 证据 | `output/evaluation/`、`output/benchmark/`，W&B |
+| G7 验证与导出 | 固定 command suite、11 类 terrain、Plateau/Washboard、checkpoint 选择 | `continuous_mixed` 与两条固定跑道都须依序通过检查点、保持赛道走廊、无不安全终止并完整结束 episode；性能阈值按 `docs/ACCEPTANCE_CRITERIA.md` 判定，尚无策略 PASS 证据 | `output/evaluation/`、`output/benchmark/`，W&B |
 
 ## 与参考任务的边界
 

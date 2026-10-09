@@ -24,6 +24,8 @@ from base_locomotion_stackforce_quadrupedal.evaluation.metric.logging import (
 
 
 ROUTE_ROLE_NAMES = ("single", "entry", "interior", "exit_recovery")
+CONTINUOUS_ROUTE_CHECKPOINTS_M = (1.0, 2.5, 3.5)
+CONTINUOUS_ROUTE_HALF_WIDTH_M = 1.5
 
 
 def _finite_or_zero(value: torch.Tensor) -> torch.Tensor:
@@ -115,6 +117,8 @@ class LocomotionEpisodeMetrics:
             "supported_wheel_count",
             "base_collision_count",
             "command_feasible_count",
+            "continuous_route_ordered_checkpoints",
+            "continuous_route_corridor_valid",
         )
         self._buffers = {
             name: torch.zeros(self.num_envs, device=self.device) for name in names
@@ -128,6 +132,7 @@ class LocomotionEpisodeMetrics:
         for value in self._reward_weighted.values():
             value[env_ids] = 0.0
         self._last_action[env_ids] = 0.0
+        self._buffers["continuous_route_corridor_valid"][env_ids] = 1.0
         terrain = self.env.scene.terrain
         terrain_types = getattr(terrain, "terrain_types", None)
         terrain_levels = getattr(terrain, "terrain_levels", None)
@@ -227,6 +232,24 @@ class LocomotionEpisodeMetrics:
             if family is not None:
                 unset = self._episode_motion_family < 0
                 self._episode_motion_family[unset] = family[unset]
+        if self.metric_groups["terrain"]:
+            continuous_id = TRAINING_TERRAIN_FAMILIES.index(COMPOSITION_FAMILY)
+            continuous = self._episode_terrain_type == continuous_id
+            local_position = robot.data.root_pos_w[:, :2] - self.env.scene.terrain.env_origins[:, :2]
+            in_corridor = torch.abs(local_position[:, 0]) <= CONTINUOUS_ROUTE_HALF_WIDTH_M
+            self._buffers["continuous_route_corridor_valid"][continuous & ~in_corridor] = 0.0
+            progress = self._buffers["continuous_route_ordered_checkpoints"]
+            checkpoint_index = progress.long().clamp_max(len(CONTINUOUS_ROUTE_CHECKPOINTS_M) - 1)
+            checkpoint_targets = torch.tensor(
+                CONTINUOUS_ROUTE_CHECKPOINTS_M, device=self.device
+            )[checkpoint_index]
+            reached = (
+                continuous
+                & in_corridor
+                & (progress < len(CONTINUOUS_ROUTE_CHECKPOINTS_M))
+                & (local_position[:, 1] >= checkpoint_targets)
+            )
+            progress[reached] += 1.0
 
     def observe_reward(self, reward: torch.Tensor) -> None:
         if self.metric_groups["core"]:
@@ -301,6 +324,16 @@ class LocomotionEpisodeMetrics:
                 "terrain/type_id": self._episode_terrain_type[env_ids].float(),
                 "terrain/level": self._episode_terrain_level[env_ids].float(),
                 "terrain/route_role_id": route_role,
+                "terrain/continuous_route_ordered_checkpoints": self._buffers[
+                    "continuous_route_ordered_checkpoints"
+                ][env_ids],
+                "terrain/continuous_route_complete": (
+                    self._buffers["continuous_route_ordered_checkpoints"][env_ids]
+                    == len(CONTINUOUS_ROUTE_CHECKPOINTS_M)
+                ).float(),
+                "terrain/continuous_route_corridor_valid": self._buffers[
+                    "continuous_route_corridor_valid"
+                ][env_ids],
             })
             terrain_cfg = self.env.cfg.scene.terrain.terrain_generator
             if terrain_cfg is None:

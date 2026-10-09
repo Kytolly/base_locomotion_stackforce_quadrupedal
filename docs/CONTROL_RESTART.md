@@ -38,7 +38,7 @@
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/evaluate_suite.py --checkpoint <checkpoint>
 ```
 
-参数来自 `configs/evaluation/generalization.yaml`，可用 `launcher.viz=none` 覆盖。每次新建输出目录，包含 5 个留出 seed 的五命令/八地形/八难度评测，以及两种跑道各 5 个 nominal 和 5 个 randomized run，共 25 次。日志写入 `logs/evaluation/`，汇总写入 `output/generalization/`。脚本拒绝将训练 terrain seed 放进同分布 validation seed 列表。
+参数来自 `configs/evaluation/generalization.yaml`，可用 `launcher.viz=none` 覆盖。每个 validation run 使用固定 command suite、全部 11 类地形和八个难度等级；`continuous_mixed` 必须按序完成路线检查点。配置包含两组 profile 标签下各 5 个留出 seed，以及两种跑道各 5 个 nominal 和 5 个 randomized run，共 30 次。日志写入 `logs/evaluation/`，汇总写入 `output/generalization/`。脚本拒绝将训练 terrain seed 放进同分布 validation seed 列表。
 
 同生成器换 seed 是同分布新实例测试。Plateau 是新组合及部分坡度外推，Washboard 是未训练过的圆柱接触几何。nominal 的多 seed 重复用于复现，不代表五种不同地形。测试集参数不能作为训练样本直接回灌；若按测试结果调参，最终报告还需独立冻结的测试集合。
 

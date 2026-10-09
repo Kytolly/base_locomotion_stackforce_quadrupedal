@@ -99,7 +99,7 @@ logging:
   --wandb --wandb-mode online
 ```
 
-它不执行 PPO 更新。上传 checkpoint 路径/SHA256、seed、git commit、五 command 整体/terrain 指标与 `performance_pass`。完整 suite 使用 `scripts/evaluate_suite.py --checkpoint <checkpoint> --wandb`，为每个 validation seed 建立独立 run。不要并发启动训练与验证的独立 PhysX 进程争用 GPU；共享 Kit 流程须在 checkpoint 写盘后暂停训练再评估。
+它不执行 PPO 更新。上传 checkpoint 路径/SHA256、seed、git commit、固定 command suite 的整体/terrain 指标、连续混合路线完成证据与 `performance_pass`。每个 held-out seed 都以确定性等比例布局覆盖全部 11 类地形；PPO 与 BiSEC 使用同一个脚本和协议。完整 suite 使用 `scripts/evaluate_suite.py --checkpoint <checkpoint> --wandb`，为每个 validation seed 建立独立 run。不要并发启动训练与验证的独立 PhysX 进程争用 GPU；共享 Kit 流程须在 checkpoint 写盘后暂停训练再评估。
 
 固定 benchmark 用冻结策略，零动作只作 smoke：
 

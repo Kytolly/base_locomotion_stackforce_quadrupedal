@@ -92,6 +92,10 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.policy import (  # noqa: E501,E402
     LOCOMOTION_COMMAND_NAME,
 )
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import (  # noqa: E501,E402
+    TRAINING_TERRAIN_FAMILIES,
+    get_complex_terrain_cfg,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -174,11 +178,27 @@ def _run_scenario(env, vec_env, policy, scenario) -> dict[str, torch.Tensor]:
     if args_cli.terrain_level >= 0:
         levels.fill_(args_cli.terrain_level)
     terrain.terrain_levels[:] = levels
+    terrain.terrain_types[:] = torch.arange(env.num_envs, device=env.device) % len(
+        TRAINING_TERRAIN_FAMILIES
+    )
     terrain.env_origins[:] = terrain.terrain_origins[levels, terrain.terrain_types]
     vec_env.reset()
     if policy is not None:
         policy.reset(torch.ones(env.num_envs, dtype=torch.long, device=env.device))
-    accumulator = LocomotionEpisodeMetrics(env)
+    accumulator = LocomotionEpisodeMetrics(
+        env,
+        metric_groups={
+            "core": True,
+            "safety": True,
+            "runtime": True,
+            "command": True,
+            "support": True,
+            "actuation": True,
+            "terrain": True,
+            "motion": True,
+            "reward": True,
+        },
+    )
     accumulator.reset()
     command = torch.tensor(scenario.command, device=env.device).repeat(env.num_envs, 1)
     command_term = env.command_manager.get_term(LOCOMOTION_COMMAND_NAME)
@@ -253,14 +273,16 @@ def main() -> None:
     )
     env_cfg.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
     env_cfg.__post_init__()
-    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import (
-        get_complex_terrain_cfg,
-    )
-
     env_cfg.terrain_profile = args_cli.terrain_profile
-    env_cfg.scene.terrain.terrain_generator = get_complex_terrain_cfg(
-        seed=args_cli.seed, profile=args_cli.terrain_profile
+    validation_terrain = get_complex_terrain_cfg(
+        seed=args_cli.seed,
+        num_cols=len(TRAINING_TERRAIN_FAMILIES),
+        profile="union_consolidation",
     )
+    equal_proportion = 1.0 / len(TRAINING_TERRAIN_FAMILIES)
+    for subterrain in validation_terrain.sub_terrains.values():
+        subterrain.proportion = equal_proportion
+    env_cfg.scene.terrain.terrain_generator = validation_terrain
     env_cfg.curriculum.terrain_levels = None
     env_cfg.events.reset_root.params["slope_approach_fraction"] = 0.0
     # Keep the selected deterministic family layout, freeze only updates.

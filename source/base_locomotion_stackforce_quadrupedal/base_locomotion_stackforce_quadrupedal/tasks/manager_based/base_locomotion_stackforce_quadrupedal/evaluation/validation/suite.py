@@ -8,21 +8,12 @@ from typing import Any
 import torch
 from base_locomotion_stackforce_quadrupedal.benchmark.acceptance import MAXIMUMS, MINIMUMS, passes_thresholds
 
-from ...env.terrains import TERRAIN_FAMILIES, TRAINING_TERRAIN_FAMILIES
+from ...env.terrains import TRAINING_TERRAIN_FAMILIES
 
 
 VALIDATION_FAMILIES_BY_PROFILE = {
-    "legacy_equal": tuple(
-        family for family in TERRAIN_FAMILIES if family != "hf_pyramid_slope_inv"
-    ),
-    "source_alignment": (
-        "random_rough",
-        "boxes",
-        "pyramid_stairs",
-        "pyramid_stairs_inv",
-        "hf_pyramid_slope",
-        "hf_pyramid_slope_inv",
-    ),
+    profile: TRAINING_TERRAIN_FAMILIES
+    for profile in ("legacy_equal", "source_alignment", "union_consolidation")
 }
 
 
@@ -32,14 +23,21 @@ class ValidationScenario:
 
     name: str
     command: tuple[float, float, float, float]
+    requires_continuous_route: bool = False
 
 
 DEFAULT_VALIDATION_SCENARIOS = (
     ValidationScenario("stop", (0.0, 0.0, 0.0, 0.105)),
-    ValidationScenario("forward", (0.35, 0.0, 0.0, 0.105)),
+    ValidationScenario("forward", (0.35, 0.0, 0.0, 0.105), True),
     ValidationScenario("backward", (-0.35, 0.0, 0.0, 0.105)),
+    ValidationScenario("lateral_left", (0.0, 0.10, 0.0, 0.105)),
+    ValidationScenario("lateral_right", (0.0, -0.10, 0.0, 0.105)),
     ValidationScenario("left_turn", (0.0, 0.0, 0.25, 0.105)),
     ValidationScenario("right_turn", (0.0, 0.0, -0.25, 0.105)),
+    ValidationScenario("forward_left_turn", (0.35, 0.0, 0.20, 0.105)),
+    ValidationScenario("backward_right_turn", (-0.35, 0.0, -0.20, 0.105)),
+    ValidationScenario("low_body", (0.0, 0.0, 0.0, 0.095)),
+    ValidationScenario("high_body", (0.0, 0.0, 0.0, 0.115)),
 )
 
 
@@ -93,6 +91,13 @@ def _scenario_report(
                 "safety/timeout_survival_rate" if name == "safety/timeout" else name
             )
             family_result[output_name] = _mean(metrics[name][mask])
+        if family == "continuous_mixed":
+            for name in (
+                "terrain/continuous_route_complete",
+                "terrain/continuous_route_ordered_checkpoints",
+                "terrain/continuous_route_corridor_valid",
+            ):
+                family_result[name] = _mean(metrics[name][mask])
         families[family] = family_result
 
     aggregate: dict[str, float] = {}
@@ -134,7 +139,8 @@ def build_validation_report(
 ) -> dict[str, Any]:
     """Build a JSON-serializable report with checkpoint-selection evidence."""
     terrain_families = VALIDATION_FAMILIES_BY_PROFILE.get(
-        str(metadata.get("terrain_profile", "union_consolidation")), TERRAIN_FAMILIES
+        str(metadata.get("terrain_profile", "union_consolidation")),
+        TRAINING_TERRAIN_FAMILIES,
     )
     scenarios = {
         name: _scenario_report(metrics, terrain_families)
@@ -161,7 +167,26 @@ def build_validation_report(
         and metadata.get("num_envs", 0) % 64 == 0
         and metadata.get("episode_steps", 0) * metadata.get("policy_dt_s", 0) >= 30.0
     )
-    performance_pass = complete_commands and complete_terrains and complete_episodes and all_finite and protocol_complete
+    route_scenarios = {
+        scenario.name for scenario in DEFAULT_VALIDATION_SCENARIOS
+        if scenario.requires_continuous_route
+    }
+    continuous_route_complete = complete_commands and all(
+        scenarios[name]["terrain_families"]["continuous_mixed"].get(
+            "terrain/continuous_route_complete", 0.0
+        ) == 1.0
+        and scenarios[name]["terrain_families"]["continuous_mixed"].get(
+            "terrain/continuous_route_ordered_checkpoints", 0.0
+        ) == 3.0
+        and scenarios[name]["terrain_families"]["continuous_mixed"].get(
+            "terrain/continuous_route_corridor_valid", 0.0
+        ) == 1.0
+        for name in route_scenarios
+    )
+    performance_pass = (
+        complete_commands and complete_terrains and complete_episodes and all_finite
+        and protocol_complete and continuous_route_complete
+    )
     for result in scenarios.values():
         overall = result["overall"]
         performance_pass &= all(
@@ -170,7 +195,7 @@ def build_validation_report(
         )
         performance_pass &= passes_thresholds(overall)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "metadata": metadata,
         "scenarios": scenarios,
         "selection_evidence": {
@@ -184,12 +209,14 @@ def build_validation_report(
             "complete_terrain_coverage": complete_terrains,
             "complete_episodes": complete_episodes,
             "all_finite": all_finite,
+            "continuous_route_complete": continuous_route_complete,
             "performance_pass": bool(performance_pass),
             "protocol_complete": protocol_complete,
             "thresholds": thresholds,
             "rule": (
                 "Performance PASS requires all recorded command and terrain coverage, complete finite episodes, "
-                "and every fixed threshold; episode reward alone is not a selection criterion."
+                "the ordered continuous-mixed route, and every fixed threshold; episode reward alone is not a "
+                "selection criterion."
             ),
         },
     }

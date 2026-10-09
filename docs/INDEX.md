@@ -13,7 +13,7 @@
 - critic 额外读取 16 维当前特权真值；特权量不进入 policy observation；
 - Terrain-Union-v1 包含原八类、倒金字塔斜坡、平地和连续混合路线，并提供四阶段训练配比；
 - training metrics 已接入两个 RSL-RL 训练入口，通过 `extras["log"]` 交给日志后端；正式训练开启全部指标组和 W&B 面板组；
-- 固定 validation 覆盖 5 组 command、九类 rough primitive 和 DeepRobotics 来源对齐 profile，并输出 macro/worst-family 指标；
+- 固定 validation 覆盖横移、复合转向和高低机身在内的 11 组 command，以及全部 11 类地形；`continuous_mixed` 额外要求按序通过入口、内部和恢复段，并输出 macro/worst-family 指标；
 - CPU 单环境 metrics smoke 与 64 环境零策略 validation smoke 已通过。它们只验证流程和数据合同，不代表策略已训练成功。
 
 ## 代码目录职责
