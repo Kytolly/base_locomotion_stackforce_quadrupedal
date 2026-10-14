@@ -43,6 +43,12 @@ LEGS = ("FR", "FL", "RL", "RR")
 def main() -> None:
     cfg = parse_env_cfg(TASK, device=args.device, num_envs=1)
     cfg.seed = args.seed
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.complex_env_cfg import (
+        apply_e0_env_options,
+        checkpoint_env_options,
+    )
+
+    apply_e0_env_options(cfg, checkpoint_env_options(args.checkpoint))
     cfg.episode_length_s = args.steps * float(cfg.sim.dt) * int(cfg.decimation)
     env = gym.make(TASK, cfg=cfg, **({"render_mode": "rgb_array"} if not args.no_video else {}))
     print("[STEPPING-REPLAY] environment created", flush=True)
@@ -99,7 +105,7 @@ def main() -> None:
         initial_y = float(robot.data.root_pos_w[0, 1])
         base.post_physics_callbacks = [capture]
         for step in range(args.steps):
-            command = torch.tensor([[0.20, 0.0, 0.0, 0.105]], device=base.device)
+            command = torch.tensor([[0.20, 0.0, 0.0, float(base.cfg.nominal_body_height_m)]], device=base.device)
             base.command_manager.get_term("locomotion").set_command(command)
             with torch.inference_mode():
                 inferred = policy(vec.get_observations()).clamp(-1, 1)

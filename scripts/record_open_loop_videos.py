@@ -119,7 +119,7 @@ def main() -> None:
             initial_y = float(probe.state["root_xyz"][1])
             env.post_physics_callbacks = [probe.capture, capture]
             action = make_action(torch, env.device, args.leg_limit)
-            command = torch.tensor([[args.speed, 0, 0, 0.105]], device=env.device)
+            command = torch.tensor([[args.speed, 0, 0, float(env.cfg.nominal_body_height_m)]], device=env.device)
             if args.mode == "stretch_bend_forward":
                 # Hold a global crouch, roll forward, then extend all four legs.
                 bend = torch.tensor([[-2.8, -2.8, 2.8, 2.8, 2.8, -2.8, -2.8, 2.8, 0, 0, 0, 0]], device=env.device)

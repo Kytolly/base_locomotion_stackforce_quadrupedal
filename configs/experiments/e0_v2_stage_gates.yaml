@@ -1,0 +1,93 @@
+# G8 stage-end checks and abort conditions for the E0-v2-46d long run.
+# Source: docs/ACTION_RANGE_THROUGHPUT_FIX_PLAN.md, G8.
+#
+# Every check reads one TensorBoard scalar from the finished stage run.
+#   tags:   candidates; the first exact match wins, then a "/<tag>" suffix match
+#   stat:   tail_mean | tail_median | tail_min | tail_max | tail_last
+#           head_mean | head_median | head_min | head_max | head_last
+#   window: number of logged iterations the statistic uses
+#   value:  number, or a context name such as "inherited_level-1"
+# A metric that was not logged is MISSING and pauses the lineage like FAIL.
+# Run `python scripts/e0_run_health.py --run <run_dir> --stage <stage> --list-tags`
+# to see the exact logged tags if a check reports MISSING.
+schema_version: 1
+
+stages:
+  foundation:
+    - name: finite_rate
+      tags: [train/runtime/finite_rate, train/runtime/all_finite]
+      stat: tail_min
+      window: 300
+      op: ">="
+      value: 1.0
+    - name: leg_saturation_rate
+      tags: [train/actuation/leg_saturation_rate]
+      stat: tail_mean
+      window: 300
+      op: "<"
+      value: 0.15
+    - name: flat_timeout_rate
+      tags: [train/terrain/flat/timeout_survival_rate]
+      stat: tail_mean
+      window: 300
+      op: ">="
+      value: 0.90
+
+  expansion:
+    # Old b0/b2 baselines plateaued at level 3.7-4.0 at the same point.
+    - name: terrain_level_above_old_baseline
+      tags: [train/terrain/level, Curriculum/terrain_levels]
+      stat: tail_mean
+      window: 300
+      op: ">="
+      value: 4.5
+    # T1: the first 100 iterations after resume must not fall back towards 1.
+    - name: no_level_fallback_after_resume
+      tags: [train/terrain/level, Curriculum/terrain_levels]
+      stat: head_min
+      window: 100
+      op: ">="
+      value: inherited_level-1
+    # Old baselines: stairs unsafe 36-41 %.  Note: before E0-v2 the training
+    # per-family keys were indexed by terrain column, not family, so recompute
+    # the old baseline from validation JSON (G0) before trusting this threshold.
+    - name: stairs_unsafe_below_old_baseline
+      tags: [train/terrain/pyramid_stairs/safety/unsafe_termination]
+      stat: tail_mean
+      window: 300
+      op: "<"
+      value: 0.36
+
+  composition:
+    - name: terrain_level_not_regressing
+      tags: [train/terrain/level, Curriculum/terrain_levels]
+      stat: tail_mean
+      window: 300
+      op: ">="
+      value: inherited_level
+    - name: closure_residual_max_mm
+      tags: [train/runtime/closure_residual_max_mm]
+      stat: tail_max
+      window: 300
+      op: "<="
+      value: 1.0
+    - name: total_saturation_rate
+      tags: [train/actuation/leg_saturation_rate]
+      stat: tail_mean
+      window: 300
+      op: "<"
+      value: 0.10
+
+  consolidation:
+    - name: finite_rate
+      tags: [train/runtime/finite_rate, train/runtime/all_finite]
+      stat: tail_min
+      window: 300
+      op: ">="
+      value: 1.0
+
+abort:
+  finite_tags: [train/runtime/all_finite, train/runtime/finite_rate]
+  unsafe_tags: [train/safety/unsafe_termination]
+  unsafe_window: 500
+  unsafe_limit: 0.30

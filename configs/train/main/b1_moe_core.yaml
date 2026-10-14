@@ -8,4 +8,4 @@ agent:
     architecture: sparse_moe
 
 wandb:
-  group: e0-b1-moe-core
+  group: e0v2-b1-moe-core

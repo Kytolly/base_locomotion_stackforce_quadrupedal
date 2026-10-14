@@ -36,11 +36,9 @@ def split_policy_action(action: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     return action[..., LEG_ACTION_SLICE], action[..., WHEEL_ACTION_SLICE]
 
 
-@configclass
-class RobotActionCfg:
-    """Define the 12-D action space from which RSL-RL derives the Actor output width."""
-
-    leg_position = mdp.JointPositionActionCfg(
+def legacy_leg_position_cfg() -> mdp.JointPositionActionCfg:
+    """E0-v1 legs: symmetric +-0.5 rad around a zero stance (P0 control, old checkpoints)."""
+    return mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=list(LEG_JOINTS),
         scale=LEG_POSITION_SCALE,
@@ -48,6 +46,33 @@ class RobotActionCfg:
         preserve_order=True,
         clip={".*": LEG_POSITION_TARGET_CLIP},
     )
+
+
+def servo_leg_position_cfg(contract: dict | None = None):
+    """E0-v2 legs: raw 0 -> stance, raw +-1 -> per-joint DS041MG 0.9-travel limits."""
+    from .asymmetric import AsymmetricJointPositionActionCfg
+    from .servo_range import leg_joint_ranges, load_servo_contract
+
+    contract = contract or load_servo_contract()
+    lower, _, upper = leg_joint_ranges(LEG_JOINTS, contract)
+    return AsymmetricJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=list(LEG_JOINTS),
+        use_default_offset=True,
+        preserve_order=True,
+        lower=dict(zip(LEG_JOINTS, lower)),
+        upper=dict(zip(LEG_JOINTS, upper)),
+        projection=dict(contract.get("projection", {})),
+    )
+
+
+@configclass
+class RobotActionCfg:
+    """Define the 12-D action space from which RSL-RL derives the Actor output width."""
+
+    # The task config replaces this with ``servo_leg_position_cfg()`` for E0-v2
+    # (``BaseLocomotionComplexEnvCfg.apply_action_contract``).
+    leg_position = legacy_leg_position_cfg()
     wheel_velocity = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=list(WHEEL_JOINTS),

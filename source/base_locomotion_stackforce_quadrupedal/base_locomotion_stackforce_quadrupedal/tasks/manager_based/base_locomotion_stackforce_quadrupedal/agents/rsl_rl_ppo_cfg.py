@@ -11,7 +11,8 @@ from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPp
 @configclass
 class BoundedDistributionCfg:
     class_name: str = "base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution"
-    init_std: float = 0.3
+    # Scalar, or one value per action dimension (E0-v2: legs and wheels differ).
+    init_std: float | list[float] = 0.3
     std_type: str = "log"
     min_std: float = 0.05
     max_std: float = 0.5

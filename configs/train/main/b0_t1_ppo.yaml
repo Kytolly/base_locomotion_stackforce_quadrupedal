@@ -1,7 +1,7 @@
 extends: ../base_locomotion_e0_46d.yaml
 
 agent:
-  run_name: b0_t1_ppo_foundation_seed${env.seed}
+  run_name: simplePPOv2-foundation-seed${env.seed}
 
 wandb:
-  group: e0-b0-t1-ppo
+  group: e0v2-b0-t1-ppo

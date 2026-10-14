@@ -83,9 +83,13 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
     LocomotionEpisodeMetrics,
 )
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.validation.suite import (  # noqa: E501,E402
-    DEFAULT_VALIDATION_SCENARIOS,
     build_validation_report,
+    validation_scenarios,
     validation_terrain_layout,
+)
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.complex_env_cfg import (  # noqa: E501,E402
+    apply_e0_env_options,
+    checkpoint_env_options,
 )
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.action import (  # noqa: E501,E402
     POLICY_ACTION_DIM,
@@ -275,11 +279,17 @@ def main() -> None:
         args_cli.episode_steps * float(env_cfg.sim.dt) * int(env_cfg.decimation)
     )
     env_cfg.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
+    # Evaluate a checkpoint under the action contract it was trained with
+    # (E0-v1 runs: legacy symmetric legs; E0-v2 runs: servo ranges and stance).
+    apply_e0_env_options(
+        env_cfg, checkpoint_env_options(args_cli.checkpoint.resolve() if args_cli.checkpoint else None)
+    )
     env_cfg.__post_init__()
     env_cfg.terrain_profile = args_cli.terrain_profile
     validation_terrain, terrain_family_by_column = validation_terrain_layout(
-        args_cli.terrain_profile, args_cli.seed
+        args_cli.terrain_profile, args_cli.seed, env_cfg.obstacle_height_ranges
     )
+    scenarios = validation_scenarios(env_cfg.nominal_body_height_m)
     env_cfg.scene.terrain.terrain_generator = validation_terrain
     env_cfg.curriculum.terrain_levels = None
     env_cfg.events.reset_root.params["slope_approach_fraction"] = 0.0
@@ -317,7 +327,7 @@ def main() -> None:
         print(f"[VALIDATION] checkpoint loaded: {checkpoint}", flush=True)
 
     try:
-        print(f"[VALIDATION] running {len(DEFAULT_VALIDATION_SCENARIOS)} scenarios", flush=True)
+        print(f"[VALIDATION] running {len(scenarios)} scenarios", flush=True)
         scenario_metrics = {
             scenario.name: _run_scenario(
                 base_env.unwrapped,
@@ -326,7 +336,7 @@ def main() -> None:
                 scenario,
                 torch.tensor(terrain_family_by_column, device=base_env.unwrapped.device),
             )
-            for scenario in DEFAULT_VALIDATION_SCENARIOS
+            for scenario in scenarios
         }
         metadata_block = {
             "task": args_cli.task,
@@ -335,6 +345,9 @@ def main() -> None:
             "episode_steps": args_cli.episode_steps,
             "terrain_level": args_cli.terrain_level,
             "terrain_profile": args_cli.terrain_profile,
+            "action_contract": env_cfg.action_contract,
+            "protocol_version": env_cfg.protocol_version,
+            "nominal_body_height_m": float(env_cfg.nominal_body_height_m),
             "terrain_family_by_column": [
                 TRAINING_TERRAIN_FAMILIES[index]
                 for index in terrain_family_by_column

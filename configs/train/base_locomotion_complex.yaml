@@ -20,6 +20,8 @@ env:
   decimation: 4
   render_interval: 4
   episode_length_s: 30.0
+  # Pre-E0-v2 experiment line: keep the E0-v1 symmetric +-0.5 rad legs and zero stance.
+  action_contract: legacy_symmetric
   physics:
     # Required by GPU broadphase at 4096 environments; 8192 uses 268435456.
     gpu_found_lost_aggregate_pairs_capacity: 67108864

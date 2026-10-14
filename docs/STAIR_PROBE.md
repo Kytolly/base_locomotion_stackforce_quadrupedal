@@ -71,10 +71,14 @@ reset distribution. `--terrain stairs` creates a straight ascending section.
   leg shortening. It is sufficient evidence of clean clearance, not a necessary
   condition for climbing: rolling contact, wheel tilt, and mixed rolling/lifting
   can produce successful traversal without passing this strict condition.
-- Frozen-policy actions remain clipped to [-1, 1], producing the trained
-  +/-0.5 rad leg targets. `--leg-limit 1.2` expands only the scripted diagnostic
-  range and does not change actuator force limits. Never compare expanded-range
-  scripted success to policy failure as evidence of a learning defect alone.
+- Frozen-policy actions remain clipped to [-1, 1]. Under E0-v1 that gives
+  +/-0.5 rad leg targets; under E0-v2 (`--action-contract servo_range_v2`, the
+  default unless the checkpoint is an E0-v1 run) it spans each joint's servo
+  range around the new stance. Scripted motions are joint offsets in rad
+  (legacy raw x 0.5) around the contract's default stance and are clamped to the
+  contract ranges. `--leg-limit` expands only the scripted diagnostic range and
+  does not change actuator force limits. Never compare expanded-range scripted
+  success to policy failure as evidence of a learning defect alone.
 
 Finite grids and one scripted gait cannot prove mechanical impossibility.
 Positive simulation results also depend on the packaged geometry, closure

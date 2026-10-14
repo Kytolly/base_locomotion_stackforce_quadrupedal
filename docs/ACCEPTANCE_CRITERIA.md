@@ -4,7 +4,7 @@
 
 These gates assess whether the controller continuously converts body-frame velocity and body-height intent into stable wheel/leg actuator targets over supported terrain. Passing a smoke test or observing one successful rollout does not qualify a policy.
 
-The current training baseline is E0-v1-46d (46D Actor, 62D Critic, 12D action). These gates apply to a frozen checkpoint; the separate 108D Hybrid proposal does not redefine that baseline. No current E0 checkpoint is claimed to pass these gates. Execution commands use `env_isaaclab` as specified in [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md).
+The current training contract is E0-v2-46d (46D Actor, 62D Critic, 12D action; leg actions span the DS041MG servo travel around the new stance, see [ACTION_RANGE_THROUGHPUT_FIX_PLAN.md](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)). E0-v1-46d b0/b2 checkpoints remain the comparison baseline. These gates apply to a frozen checkpoint; the separate 108D Hybrid proposal does not redefine that baseline. No current E0 checkpoint is claimed to pass these gates. Execution commands use `env_isaaclab` as specified in [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md).
 
 ## Physical qualification gates
 

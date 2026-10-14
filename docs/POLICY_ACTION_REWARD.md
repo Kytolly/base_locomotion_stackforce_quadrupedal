@@ -18,7 +18,8 @@ Command Manager 的 `locomotion` term 每 10 秒采样目标，并在 episode re
 forward speed magnitude: [0.15, 0.45] m/s
 lateral velocity: [-0.10, 0.10] m/s
 yaw rate:         [-0.25, 0.25] rad/s
-body height:      [0.095, 0.115] m
+body height:      E0-v2 [0.133, 0.175] m（名义 0.163 m，随站姿；临时值，G3 实测后更新）
+                  E0-v1 [0.095, 0.115] m（名义 0.105 m）
 ```
 
 Actor 和 reward 都读取 Command Manager 输出的整形后 command。Critic 在完整 Actor 输入之外读取 16 维 `privileged` 组；该组包含仿真真值线速度、相对支撑高度和主动关节力矩，不得接入 Actor。项目局部坐标的 `front` 为 `+Y`。
@@ -27,14 +28,27 @@ Actor 和 reward 都读取 Command Manager 输出的整形后 command。Critic �
 
 ## Actor 输出
 
-`RobotActionCfg` 定义 12 维策略输出，RSL-RL 从环境 action space 自动推导 Actor 输出宽度：
+`RobotActionCfg` 定义 12 维策略输出，RSL-RL 从环境 action space 自动推导 Actor 输出宽度。腿部顺序为外髋 FR、FL、RL、RR，再内髋 FR、FL、RL、RR。
 
-| 区间 | 维度 | 语义 | scale | processed clip |
-| --- | ---: | --- | ---: | --- |
-| `[0:8]` | 8 | 四腿内外髋关节位置增量 | 0.5 | `[-0.5, 0.5]` rad |
-| `[8:12]` | 4 | 四轮关节速度 | 20.0 | `[-20, 20]` rad/s |
+**E0-v2-46d（当前，`env.action_contract: servo_range_v2`）：**
 
-RSL-RL 的 `clip_actions=1.0` 将 raw action 约束在 `[-1, 1]`。`action_saturation` 从 raw action 计算接近裁剪边界的代价。
+| 区间 | 维度 | 语义 | 映射 |
+| --- | ---: | --- | --- |
+| `[0:8]` | 8 | 四腿内外髋关节位置目标 | 逐关节分段线性：raw 0 → 默认站姿，+1 → 上限，−1 → 下限；两侧增益可以不同 |
+| `[8:12]` | 4 | 四轮关节速度 | ×20.0，裁剪 `[-20, 20]` rad/s |
+
+范围 = DS041MG 当前配置的名义行程（300°）× 0.9，按 [动作范围修复计划](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md) §3A 换算到仿真关节坐标；物理端点未实测。数据在 `mdp/action/e0_v2_servo_contract.json`（由 `scripts/build_servo_contract.py` 生成；G3 实测前为临时扫描范围）。训练时这些范围在启动事件中写成仿真硬限位，URDF 里 Outer `±1.57`、Inner `±π` 的占位限位不再生效。几何选定的候选站姿为曲柄角 α=128.4°、β=66.6°（足端在髋轴下方约 137 mm），被动膝初值由 URDF 五连杆闭环求出。
+
+| 关节 | 默认 q | 下限 | 上限 |
+| --- | ---: | ---: | ---: |
+| FR/FL Outer | −0.447 | −3.019 / −3.875 | +1.693 / +0.838 |
+| RL/RR Outer | +0.447 | −1.710 / −0.576 | +3.002 / +4.136 |
+| FR/RL Inner | −1.049 | −4.250 | +0.463 |
+| FL/RR Inner | +1.049 | −1.510 / −1.283 | +3.203 / +3.429 |
+
+**E0-v1-46d（`legacy_symmetric`，仅用于 G6 的 P0 对照和旧 checkpoint 评估）：** 腿部为零站姿附近的位置增量，scale 0.5，processed clip `[-0.5, 0.5]` rad。
+
+RSL-RL 的 `clip_actions=1.0` 将 raw action 约束在 `[-1, 1]`。`action_saturation` 从 raw action 计算接近裁剪边界的代价。E0-v2 的探索噪声逐维初始化：腿为 0.15 rad 除以各关节较小一侧的半区间（使初始物理噪声与 E0-v1 的 0.3×0.5 相同），轮保持 0.3。
 
 ## Reward
 
@@ -62,7 +76,7 @@ Isaac Lab 将各项乘以环境步长 `0.02 s` 后累加。机械功项是瞬时
 
 机身相对高度由局部支撑估计提供：至少两个轮接触时优先使用轮支撑高度中位数，否则使用有限射线命中高度中位数，均无效时回退到 environment origin。`support_valid` 仍需记录；它不等于接触物理资格已通过验收。轮接触阈值为 1 N，机身碰撞阈值为 8 N。
 
-Episode 上限为 30 s（50 Hz 控制下 1500 步）。当前不安全终止包括：机身相对支撑高度低于 `0.06 m`、倾斜超过 `1.05 rad`、或机身接触力超过 `8.0 N`。这些终止不应与 timeout 混为一类。
+Episode 上限为 30 s（50 Hz 控制下 1500 步）。当前不安全终止包括：机身相对支撑高度低于最低高度（E0-v2 为 0.093 m，E0-v1 为 0.06 m）、倾斜超过 `1.05 rad`、或机身接触力超过 `8.0 N`。`low_body_height_margin` 的预警高度 E0-v2 为 0.124 m（E0-v1 为 0.08 m）；两者都按名义高度同比缩放。这些终止不应与 timeout 混为一类。
 
 ## 验证
 
@@ -86,9 +100,9 @@ Isaac Sim 运行时合同：
 
 - `train/locomotion/*`：四轴 RMSE、实际速度/高度均值、前向位移；
 - `train/safety/*`：非 timeout 终止、timeout、base-height failure、姿态 mean/RMS/P95；
-- `train/actuation/*`：腿/轮 action RMS、action rate、饱和率、关节限位率、轮腿机械能；
+- `train/actuation/*`：腿/轮 action RMS、action rate、饱和率、关节限位率、轮腿机械能；G1 诊断：`leg_saturation_rate`、`wheel_saturation_rate`、`leg_torque_saturation_rate`（\|τ\| ≥ 0.95·上限）、`leg_torque_over_rated_rate`（\|τ\| > 0.127 N·m）、`leg_tracking_error_rad`、`leg_torque_1s_mean_max_nm`；
 - `train/reward/raw/*` 与 `train/reward/weighted/*`：每个 reward term 的未加权和加权 episode 累积；
-- `train/terrain/*` 与 `train/runtime/*`：terrain family/level/difficulty、有限值状态。
+- `train/terrain/*` 与 `train/runtime/*`：terrain family/level/difficulty、有限值状态、`closure_residual_max_mm`（4 个闭环的径向残差最大值，每 10 步采样）。
 
 固定 validation 使用 [validate_policy.py](../scripts/validate_policy.py)：
 
@@ -99,4 +113,4 @@ Isaac Sim 运行时合同：
   --output output/evaluation/<run>/seed_1001.json
 ```
 
-它不执行 PPO 更新，报告 `ppo_updates=0`，依次测试 `stop`、`forward`、`backward`、`left_turn`、`right_turn`，并为八类 terrain family 计算 macro/worst 聚合。只有五种 command 全部存在、所有 episode 完成、八类地形均被覆盖且 `runtime/all_finite=1` 时，`selection_evidence.eligible_for_checkpoint_comparison` 才为 true。该字段只证明评估数据结构完整、可以横向比较，不表示策略达到性能验收线。零策略可作为流程和基线检查，但不能证明学习后的 locomotion 能力。
+它按 checkpoint 所在 run 的 `resolved_training_config.yaml` 选择动作合同（E0-v1 run 自动用 `legacy_symmetric`），11 组 command 的高度取该合同的名义高度（低/高机身为名义 ∓10 mm）。它不执行 PPO 更新，报告 `ppo_updates=0`，依次测试 `stop`、`forward`、`backward`、`left_turn`、`right_turn`，并为八类 terrain family 计算 macro/worst 聚合。只有五种 command 全部存在、所有 episode 完成、八类地形均被覆盖且 `runtime/all_finite=1` 时，`selection_evidence.eligible_for_checkpoint_comparison` 才为 true。该字段只证明评估数据结构完整、可以横向比较，不表示策略达到性能验收线。零策略可作为流程和基线检查，但不能证明学习后的 locomotion 能力。

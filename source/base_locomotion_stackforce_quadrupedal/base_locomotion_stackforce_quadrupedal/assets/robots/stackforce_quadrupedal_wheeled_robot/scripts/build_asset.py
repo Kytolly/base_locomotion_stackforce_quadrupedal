@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -24,7 +25,22 @@ from isaacsim.asset.importer.urdf.impl import URDFImporter, URDFImporterConfig  
 
 ASSET_ROOT = Path(__file__).resolve().parents[1]
 ROBOTS_ROOT = ASSET_ROOT.parent
-SOURCE_ROOT = ROBOTS_ROOT / "closed_link_robot"
+
+
+def resolve_source_root() -> Path:
+    candidates = []
+    if override := os.getenv("SF_QUAD_SOURCE_ASSET_ROOT"):
+        candidates.append(Path(override).expanduser())
+    candidates.append(ROBOTS_ROOT / "closed_link_robot")
+    for parent in ASSET_ROOT.parents:
+        candidates.append(parent / "sf_quad/source/sf_quad/sf_quad/assets/robots/closed_link_robot")
+    for candidate in candidates:
+        if (candidate / "urdf/sf_robot.urdf").is_file():
+            return candidate
+    raise FileNotFoundError("closed_link_robot source asset not found; set SF_QUAD_SOURCE_ASSET_ROOT")
+
+
+SOURCE_ROOT = resolve_source_root()
 SOURCE_URDF = SOURCE_ROOT / "urdf/sf_robot.urdf"
 SOURCE_STAGE = SOURCE_ROOT / "urdf/sf_robot/sf_robot.usda"
 VALIDATION = SOURCE_ROOT / "ref_b_real_fr/four_inner_chains_validation.json"
@@ -182,6 +198,17 @@ def normalized_outer_meshes(robot: ET.Element) -> None:
         shutil.copy2(SOURCE_ROOT / "meshes" / source_name, MESH_DIR / names[link_name])
 
 
+def normalize_passive_knee_limits(robot: ET.Element) -> None:
+    """Keep loop-closure knees from inheriting the source asset's hip placeholder."""
+    joints = {joint.get("name"): joint for joint in robot.findall("joint")}
+    for leg in LEGS:
+        limit = joints[f"{leg}_Outer_Knee_Joint"].find("limit")
+        if limit is None:
+            raise RuntimeError(f"{leg}: outer knee has no limit")
+        limit.set("lower", "-3.14159265359")
+        limit.set("upper", "3.14159265359")
+
+
 def build() -> Path:
     validation = json.loads(VALIDATION.read_text(encoding="utf-8"))
     if validation.get("status") != "PASS":
@@ -201,6 +228,7 @@ def build() -> Path:
     tree = ET.parse(SOURCE_URDF)
     robot = tree.getroot()
     robot.set("name", "stackforce_quadrupedal_wheeled_robot")
+    normalize_passive_knee_limits(robot)
     normalized_outer_meshes(robot)
     ET.SubElement(robot, "material", {"name": "inner_upper_yellow"}).append(
         ET.Element("color", {"rgba": "1.0 0.55 0.0 1.0"})

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import struct
 import xml.etree.ElementTree as ET
@@ -13,6 +14,20 @@ ASSET_ROOT = Path(__file__).resolve().parents[1]
 URDF_PATH = ASSET_ROOT / "urdf/stackforce_quadrupedal_wheeled_robot.urdf"
 CONFIG_PATH = ASSET_ROOT / "config/closure_frames.json"
 LEGS = ("FR", "FL", "RL", "RR")
+
+
+def source_urdf() -> Path:
+    candidates = []
+    if override := os.getenv("SF_QUAD_SOURCE_ASSET_ROOT"):
+        candidates.append(Path(override).expanduser())
+    candidates.append(ASSET_ROOT.parent / "closed_link_robot")
+    for parent in ASSET_ROOT.parents:
+        candidates.append(parent / "sf_quad/source/sf_quad/sf_quad/assets/robots/closed_link_robot")
+    for candidate in candidates:
+        path = candidate / "urdf/sf_robot.urdf"
+        if path.is_file():
+            return path
+    raise FileNotFoundError("closed_link_robot source asset not found; set SF_QUAD_SOURCE_ASSET_ROOT")
 
 
 def main() -> None:
@@ -48,7 +63,7 @@ def main() -> None:
     if visited != links:
         raise RuntimeError(f"Disconnected links: {links - visited}")
 
-    source = ET.parse(ASSET_ROOT.parent / "closed_link_robot/urdf/sf_robot.urdf").getroot()
+    source = ET.parse(source_urdf()).getroot()
     generated = {j.get("name"): j for j in joints}
     role_map = {"thigh_joint": "Outer_Hip_Joint", "calf_joint": "Outer_Knee_Joint", "foot_joint": "Wheel_Joint"}
     for original in source.findall("joint"):
@@ -58,10 +73,18 @@ def main() -> None:
         current = generated[canonical_name]
         if original.attrib != current.attrib:
             raise RuntimeError(f"Outer joint changed: {original.get('name')}")
-        for tag in ("parent", "child", "origin", "axis", "limit", "dynamics", "mimic"):
+        for tag in ("parent", "child", "origin", "axis", "dynamics", "mimic"):
             old, new = original.find(tag), current.find(tag)
             if (None if old is None else old.attrib) != (None if new is None else new.attrib):
                 raise RuntimeError(f"Outer joint {original.get('name')} {tag} changed")
+        old_limit, new_limit = original.find("limit"), current.find("limit")
+        if canonical_name.endswith("_Outer_Knee_Joint"):
+            expected = dict(old_limit.attrib)
+            expected.update(lower="-3.14159265359", upper="3.14159265359")
+            if new_limit is None or new_limit.attrib != expected:
+                raise RuntimeError(f"Passive outer knee {canonical_name} must use +-pi")
+        elif (None if old_limit is None else old_limit.attrib) != (None if new_limit is None else new_limit.attrib):
+            raise RuntimeError(f"Outer joint {original.get('name')} limit changed")
 
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     if config["source_validation_status"] != "PASS":
@@ -94,7 +117,7 @@ def main() -> None:
             if path.stat().st_size != 84 + count * 50:
                 raise RuntimeError(f"Malformed binary STL: {path}")
 
-    print(f"PASS: {len(links)} connected links, {len(joints)} joints, {len(mesh_paths)} meshes, 4 closure-frame pairs; original outer joints unchanged")
+    print(f"PASS: {len(links)} connected links, {len(joints)} joints, {len(mesh_paths)} meshes, 4 closure-frame pairs; passive outer knees use +-pi")
 
 
 if __name__ == "__main__":

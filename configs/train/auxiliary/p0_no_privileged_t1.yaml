@@ -6,4 +6,4 @@ agent:
     critic: [policy]
 
 wandb:
-  group: e0-p0-no-privileged-t1
+  group: e0v2-p0-no-privileged-t1

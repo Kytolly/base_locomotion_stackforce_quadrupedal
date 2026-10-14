@@ -6,4 +6,4 @@ agent:
     temporal_consistency_coef: 0.0
 
 wandb:
-  group: e0-a3-minus-temp
+  group: e0v2-a3-minus-temp

@@ -11,8 +11,19 @@ import glob
 import json
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
-LOG_FILE = "wandb/latest-run/files/output.log"
+def get_log_file():
+    target = Path("wandb/latest-run/files/output.log")
+    if target.is_file():
+        return str(target)
+    # Search all wandb output.log files sorted by modification time
+    candidates = sorted(Path("wandb").glob("*/files/output.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if candidates:
+        return str(candidates[0])
+    return "wandb/latest-run/files/output.log"
+
+LOG_FILE = get_log_file()
 CONFIG_PATH = "configs/train/base_locomotion_hybrid.yaml"
 
 def get_gpu_status():

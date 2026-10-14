@@ -6,4 +6,4 @@ agent:
     orthogonality_scope: all
 
 wandb:
-  group: e0-a3-all-expert-ortho
+  group: e0v2-a3-all-expert-ortho

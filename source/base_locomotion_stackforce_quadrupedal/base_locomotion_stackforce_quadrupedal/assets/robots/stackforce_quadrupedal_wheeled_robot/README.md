@@ -10,6 +10,9 @@ stage. Mirrored legs are generated from the FR master using exact X/Y chassis
 reflections, including reflected winding. `config/closure_frames.json` keeps
 the measured Wheel/Closure world relationship: the axial offset is about -44.950 mm,
 the radial residual is below 2e-14 m, and the P2 surface gap is 0.150 mm.
+Both passive knee joints use a symmetric ±π simulation range. Feasible active
+hip motion is qualified separately through closure, tracking and collision
+checks; the source model's ±1.57 outer-knee placeholder is not a mechanical stop.
 
 ## Build and validate
 

@@ -1,5 +1,8 @@
 schema_version: 2
-protocol_version: E0-v1-46d
+# E0-v2-46d: leg actions follow the configured DS041MG travel (0.9 of 300 deg) and the
+# new default stance; see docs/ACTION_RANGE_THROUGHPUT_FIX_PLAN.md (G4).
+# E0-v1 checkpoints are evaluation-only and cannot resume under this contract.
+protocol_version: E0-v2-46d
 actor_observation_dim: 46
 task: Base-Locomotion-Stackforce-Quadrupedal-Complex-v0
 
@@ -18,6 +21,20 @@ env:
   decimation: 4
   render_interval: 4
   episode_length_s: 30.0
+  # servo_range_v2 (E0-v2) | legacy_symmetric (E0-v1 legs; G6 P0 control only).
+  # The ranges, stance, body heights and obstacle caps come from
+  # mdp/action/e0_v2_servo_contract.json (scripts/build_servo_contract.py).
+  action_contract: servo_range_v2
+  # T1: set per stage by scripts/e0_training_orchestrator.py; null = levels 0..1.
+  terrain_init_level: null
+  # G5 throughput switches. Values here are the E0-v1 behaviour; change one only
+  # after its G5 timing and physics check passed (output/fix_plan/G5/timing_matrix.json).
+  throughput:
+    enabled_self_collisions: true      # T2
+    solver_position_iteration_count: 8 # T3
+    foot_track_pose: true              # T4
+    foot_contact_update_period: null   # T6 (null = physics dt 0.005 s)
+    replicate_physics: false           # T7
   physics:
     gpu_found_lost_aggregate_pairs_capacity: 67108864
 
@@ -43,8 +60,8 @@ agent:
   num_steps_per_env: 24
   max_iterations: 1000
   save_interval: 250
-  experiment_name: base_locomotion_e0_46d
-  run_name: e0_46d_seed42
+  experiment_name: base_locomotion_e0_v2_46d
+  run_name: e0_v2_46d_seed42
   clip_actions: 1.0
   resume: false
   load_run: null
@@ -55,7 +72,11 @@ agent:
     obs_normalization: false
     distribution_cfg:
       class_name: base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution
-      init_std: 0.3
+      # Per dimension: 8 legs (outer FR FL RL RR, inner FR FL RL RR), then 4 wheels.
+      # Leg values = 0.15 rad / smaller half-range of each joint, so the initial
+      # physical joint noise equals E0-v1 (0.3 x 0.5 rad); wheels keep 0.3.
+      # Regenerate with servo_range.leg_init_std() whenever the contract changes.
+      init_std: [0.1003, 0.1167, 0.0992, 0.1466, 0.1473, 0.1481, 0.1473, 0.1441, 0.3, 0.3, 0.3, 0.3]
       std_type: log
       min_std: 0.05
       max_std: 0.5
@@ -82,9 +103,9 @@ wandb:
   project: stackforce-quadrupedal-locomotion
   entity: null
   mode: online
-  group: e0-46d
+  group: e0v2-46d
   run_name: ${agent.run_name}
-  tags: [stackforce, quadrupedal, wheel-leg, e0, 46d]
+  tags: [stackforce, quadrupedal, wheel-leg, e0, e0-v2, 46d]
 
 video:
   enabled: false

@@ -9,6 +9,20 @@ from typing import Any
 from omegaconf import DictConfig, OmegaConf
 
 
+SUPPORTED_46D_PROTOCOLS = ("E0-v1-46d", "E0-v2-46d")
+# legacy_symmetric: E0-v1 (scale 0.5, clip +-0.5 rad, zero stance); P0 control only.
+# servo_range_v2:   E0-v2 (DS041MG 0.9-travel per-joint ranges, new stance, plan G4).
+ACTION_CONTRACTS = {"legacy_symmetric", "servo_range_v2"}
+# G5 throughput switches; each is kept only after its timing and physics check pass.
+THROUGHPUT_KEYS = {
+    "enabled_self_collisions",          # T2
+    "solver_position_iteration_count",  # T3
+    "foot_track_pose",                  # T4
+    "foot_contact_update_period",       # T6 (null = physics dt)
+    "replicate_physics",                # T7
+}
+
+
 def _load_config_tree(config_path: Path, ancestry: tuple[Path, ...] = ()) -> DictConfig:
     config_path = config_path.expanduser().resolve()
     if config_path in ancestry:
@@ -83,10 +97,30 @@ def validate_training_config(config: DictConfig) -> None:
     )
     _validate_launcher(config)
     protocol_version = str(config.get("protocol_version", ""))
-    if protocol_version.endswith("46d") and protocol_version != "E0-v1-46d":
+    if protocol_version.endswith("46d") and protocol_version not in SUPPORTED_46D_PROTOCOLS:
         raise ValueError(f"Unsupported 46D protocol version: {protocol_version!r}.")
-    if protocol_version == "E0-v1-46d" and int(config.get("actor_observation_dim", 0)) != 46:
-        raise ValueError("E0-v1-46d requires actor_observation_dim=46.")
+    if protocol_version in SUPPORTED_46D_PROTOCOLS and int(config.get("actor_observation_dim", 0)) != 46:
+        raise ValueError(f"{protocol_version} requires actor_observation_dim=46.")
+    action_contract = config.env.get("action_contract")
+    if action_contract is not None and str(action_contract) not in ACTION_CONTRACTS:
+        raise ValueError(
+            f"Unknown env.action_contract {action_contract!r}; expected one of {sorted(ACTION_CONTRACTS)}."
+        )
+    if protocol_version == "E0-v2-46d" and action_contract is None:
+        raise ValueError("E0-v2-46d requires an explicit env.action_contract.")
+    terrain_init_level = config.env.get("terrain_init_level")
+    if terrain_init_level is not None and int(terrain_init_level) < 0:
+        raise ValueError("env.terrain_init_level must be a non-negative integer or null.")
+    obstacle_heights = config.env.get("obstacle_heights") or {}
+    for name, bounds in obstacle_heights.items():
+        if name not in {"pyramid_stairs", "boxes", "continuous_steps"} or len(bounds) != 2 or not (
+            0.0 < float(bounds[0]) < float(bounds[1])
+        ):
+            raise ValueError(f"Invalid env.obstacle_heights.{name}: {bounds!r}")
+    throughput = config.env.get("throughput", {}) or {}
+    unknown_throughput = sorted(set(throughput) - THROUGHPUT_KEYS)
+    if unknown_throughput:
+        raise ValueError(f"Unknown env.throughput entries: {', '.join(unknown_throughput)}")
     if int(config.get("actor_observation_dim", 0)) <= 0:
         raise ValueError("actor_observation_dim must be positive.")
     if config.get("curriculum"):
@@ -144,6 +178,7 @@ def validate_training_config(config: DictConfig) -> None:
             "union_composition",
             "union_consolidation",
             "source_alignment",
+            "probe_low_steps",
         }
         if str(terrain_profile) not in allowed_terrain_profiles:
             raise ValueError(
@@ -172,11 +207,12 @@ def validate_training_config(config: DictConfig) -> None:
             raise ValueError("agent.load_checkpoint must name one .pt checkpoint file.")
     distribution = config.agent.get("actor", {}).get("distribution_cfg", {})
     if str(distribution.get("class_name", "")).endswith(":SquashedGaussianDistribution"):
-        if distribution.get("std_type") != "log" or not (
-            0 < float(distribution.get("min_std", 0))
-            <= float(distribution.get("init_std", 0))
-            <= float(distribution.get("max_std", 0))
-            <= 0.5
+        init_std = distribution.get("init_std", 0)
+        init_values = list(init_std) if OmegaConf.is_list(init_std) or isinstance(init_std, (list, tuple)) else [init_std]
+        min_std = float(distribution.get("min_std", 0))
+        max_std = float(distribution.get("max_std", 0))
+        if distribution.get("std_type") != "log" or not init_values or not all(
+            0 < min_std <= float(value) <= max_std <= 0.5 for value in init_values
         ):
             raise ValueError("Bounded policy requires log std and 0 < min_std <= init_std <= max_std <= 0.5.")
     for model_name in ("actor", "critic"):

@@ -4,8 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
 from pathlib import Path
+import sys
+import traceback
+
+_CUDA_LIB = Path(sys.prefix) / "lib/python3.12/site-packages/nvidia/cu13/lib"
+if _CUDA_LIB.is_dir():
+    for _name in ("libnvrtc-builtins.so.13.0", "libnvrtc.so.13"):
+        _path = _CUDA_LIB / _name
+        if _path.is_file():
+            ctypes.CDLL(str(_path), mode=ctypes.RTLD_GLOBAL)
+    os.environ["LD_LIBRARY_PATH"] = f"{_CUDA_LIB}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
 from isaaclab.app import AppLauncher
 
@@ -17,6 +29,8 @@ parser.add_argument("--steps-per-probe", type=int, default=5)
 parser.add_argument("--settle-steps", type=int, default=50)
 parser.add_argument("--motion-steps", type=int, default=200)
 parser.add_argument("--output", type=Path, default=Path("output/action-probes/latest.json"))
+parser.add_argument("--action-contract", choices=("servo_range_v2", "legacy_symmetric"), default="servo_range_v2",
+                    help="E0-v2 servo ranges (default) or the E0-v1 symmetric +-0.5 rad legs.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -39,6 +53,11 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
     WHEEL_VELOCITY_SCALE,
     WHEEL_ACTION_SLICE,
 )
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.action.servo_range import (  # noqa: E501,E402
+    load_servo_contract,
+    project_leg_target_grid,
+    raw_to_joint_target,
+)
 
 
 def _tensor(value: object) -> torch.Tensor:
@@ -55,9 +74,26 @@ def _configure_flat_probe(cfg: object) -> None:
         debug_vis=False,
     )
     cfg.curriculum.terrain_levels = None
+    cfg.curriculum.motion_family = None
+    cfg.curriculum.robustness_bin = None
     cfg.events.randomize_contact_material = None
     cfg.events.randomize_base_mass = None
     cfg.events.randomize_actuator_gains = None
+
+
+def _expected_servo_target(raw: torch.Tensor, lower: torch.Tensor, default: torch.Tensor, upper: torch.Tensor):
+    target = raw_to_joint_target(raw, lower, default, upper)
+    contract = load_servo_contract()
+    index = {name: i for i, name in enumerate(ACTIVE_JOINTS[:8])}
+    for source in contract.get("projection", {}).values():
+        spec = dict(source)
+        spec["feasible_tensor"] = torch.tensor(spec.pop("feasible"), dtype=torch.bool, device=raw.device)
+        spec["nearest_tensor"] = torch.tensor(spec.pop("nearest_feasible_flat"), dtype=torch.long, device=raw.device)
+        outer, inner = index[spec.pop("outer_joint")], index[spec.pop("inner_joint")]
+        pair = torch.stack((target[outer], target[inner])).unsqueeze(0)
+        projected = project_leg_target_grid(pair, spec)[0]
+        target[outer], target[inner] = projected[0], projected[1]
+    return target
 
 
 def _coordinated_wheel_probe(
@@ -139,6 +175,8 @@ def main() -> None:
     if args_cli.settle_steps < 0 or args_cli.motion_steps <= 0:
         raise ValueError("--settle-steps must be non-negative and --motion-steps must be positive.")
     cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
+    cfg.action_contract = args_cli.action_contract
+    cfg.apply_action_contract(rebuild_terrain=False)
     _configure_flat_probe(cfg)
     env = gym.make(args_cli.task, cfg=cfg)
     try:
@@ -148,14 +186,23 @@ def main() -> None:
         joint_ids, _ = robot.find_joints(list(ACTIVE_JOINTS), preserve_order=True)
         initial_pos = _tensor(robot.data.joint_pos)[0, joint_ids].clone()
         initial_vel = _tensor(robot.data.joint_vel)[0, joint_ids].clone()
+        default_pos = _tensor(robot.data.default_joint_pos)[0, joint_ids].clone()
+        leg_term = unwrapped.action_manager.get_term("leg_position")
+        servo = hasattr(leg_term, "joint_lower")
+        if servo:
+            leg_lower = leg_term.joint_lower[0].clone()
+            leg_upper = leg_term.joint_upper[0].clone()
+            if not torch.allclose(leg_term._offset[0], default_pos[:8], atol=1.0e-6):
+                raise RuntimeError("Servo action offset differs from the articulation default stance.")
         traces = []
         contract_pass = True
-        for action_index in range(POLICY_ACTION_DIM):
+        probes = [(index, sign) for index in range(POLICY_ACTION_DIM) for sign in (1.0, -1.0)]
+        for action_index, sign in probes:
             env.reset()
             robot = unwrapped.scene["robot"]
             root_before = _tensor(robot.data.root_pos_w)[0].clone()
             action = torch.zeros((1, POLICY_ACTION_DIM), device=unwrapped.device)
-            action[0, action_index] = args_cli.action_magnitude
+            action[0, action_index] = sign * args_cli.action_magnitude
             for _ in range(args_cli.steps_per_probe):
                 env.step(action)
             position_targets = _tensor(robot.data.joint_pos_target)[0, joint_ids]
@@ -164,21 +211,36 @@ def main() -> None:
             velocity = _tensor(robot.data.joint_vel)[0, joint_ids]
             torque = _tensor(robot.data.applied_torque)[0, joint_ids]
             root = _tensor(robot.data.root_pos_w)[0]
-            expected_position = torch.zeros_like(position_targets)
+            # Non-actuated joints keep their default targets (zero for E0-v1, the stance for E0-v2).
+            expected_position = default_pos.clone()
+            expected_position[8:] = 0.0
             expected_velocity = torch.zeros_like(velocity_targets)
+            magnitude = sign * args_cli.action_magnitude
             if action_index < 8:
-                expected_position[action_index] = args_cli.action_magnitude * LEG_POSITION_SCALE
+                if servo:
+                    expected_position[:8] = _expected_servo_target(
+                        action[0, :8], leg_lower, default_pos[:8], leg_upper
+                    )
+                else:
+                    expected_position[action_index] = default_pos[action_index] + magnitude * LEG_POSITION_SCALE
             else:
-                expected_velocity[action_index] = args_cli.action_magnitude * WHEEL_VELOCITY_SCALE
+                expected_velocity[action_index] = magnitude * WHEEL_VELOCITY_SCALE
+            finite = bool(
+                torch.isfinite(position).all() and torch.isfinite(velocity).all() and torch.isfinite(torque).all()
+            )
             channel_pass = bool(
                 torch.allclose(position_targets, expected_position, atol=1.0e-5, rtol=0.0)
                 and torch.allclose(velocity_targets, expected_velocity, atol=1.0e-5, rtol=0.0)
+                and finite
             )
             contract_pass &= channel_pass
             traces.append(
                 {
                     "action_index": action_index,
+                    "action_sign": sign,
                     "target_contract_pass": channel_pass,
+                    "finite": finite,
+                    "expected_joint_targets_position_rad": expected_position.tolist(),
                     "joint_targets_position_rad": position_targets.tolist(),
                     "joint_targets_velocity_radps": velocity_targets.tolist(),
                     "joint_position_delta_rad": (position - initial_pos).tolist(),
@@ -208,7 +270,13 @@ def main() -> None:
             "motion_steps": args_cli.motion_steps,
             "probe_terrain": "plane",
             "target_contract_pass": contract_pass,
-            "expected_leg_target_delta_rad": args_cli.action_magnitude * LEG_POSITION_SCALE,
+            "action_contract": args_cli.action_contract,
+            "default_joint_position_rad": default_pos.tolist(),
+            "leg_lower_rad": leg_lower.tolist() if servo else None,
+            "leg_upper_rad": leg_upper.tolist() if servo else None,
+            "expected_leg_target_delta_rad": (
+                "per-joint servo span" if servo else args_cli.action_magnitude * LEG_POSITION_SCALE
+            ),
             "expected_wheel_target_radps": args_cli.action_magnitude * WHEEL_VELOCITY_SCALE,
             "initial_joint_position_rad": initial_pos.tolist(),
             "initial_joint_velocity_radps": initial_vel.tolist(),
@@ -226,7 +294,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         main()
+    except Exception:
+        traceback.print_exc()
+        sys.stderr.flush()
+        exit_code = 1
     finally:
-        simulation_app.close()
+        simulation_app.close(exit_code=exit_code)

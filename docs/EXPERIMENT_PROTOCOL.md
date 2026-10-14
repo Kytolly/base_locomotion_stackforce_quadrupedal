@@ -17,7 +17,7 @@ source/     Isaac Lab 扩展与任务实现
 
 ## 配置与启动
 
-共享合同为 `configs/train/base_locomotion_e0_46d.yaml`：46D Actor、62D Critic、4096 环境和 24 steps/env。可执行实验按 `configs/train/main/` 与 `configs/train/auxiliary/` 分开；主目录仅包含 B0、B1、B2-A 和 B2-B。每个实验 YAML 固定网络、损失与 W&B group，命令行只覆盖 seed、训练阶段和精确恢复路径。
+共享合同为 `configs/train/base_locomotion_e0_46d.yaml`（`protocol_version: E0-v2-46d`，2026-10-13 起；动作合同见 [动作范围修复计划](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)）：46D Actor、62D Critic、4096 环境和 24 steps/env。E0-v2 的 run 写入 `logs/rsl_rl/base_locomotion_e0_v2_46d/`；`base_locomotion_e0_46d/` 下是 E0-v1 的 run，只用于评估和对照。可执行实验按 `configs/train/main/` 与 `configs/train/auxiliary/` 分开；主目录仅包含 B0、B1、B2-A 和 B2-B。每个实验 YAML 固定网络、损失与 W&B group，命令行只覆盖 seed、训练阶段和精确恢复路径。
 
 配置检查不启动 Isaac Sim：
 
@@ -32,7 +32,7 @@ source/     Isaac Lab 扩展与任务实现
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/train.py \
   --config configs/train/main/b2_bisec_full.yaml \
   launcher.viz=none env.num_envs=128 agent.max_iterations=1 \
-  agent.run_name=e0_46d_smoke wandb.enabled=false
+  agent.run_name=e0_v2_46d_smoke wandb.enabled=false
 ```
 
 Foundation 阶段训练命令：
@@ -95,7 +95,7 @@ logging:
 
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/validate_policy.py \
-  --checkpoint logs/rsl_rl/base_locomotion_e0_46d/<run>/model_<N>.pt \
+  --checkpoint logs/rsl_rl/base_locomotion_e0_v2_46d/<run>/model_<N>.pt \
   --wandb --wandb-mode online
 ```
 
@@ -117,7 +117,7 @@ logging:
 ```bash
 /home/kytolly/Utils/Anaconda/envs/env_isaaclab/bin/python scripts/rsl_rl/play_rsl_rl.py \
   --task Base-Locomotion-Stackforce-Quadrupedal-Complex-v0 \
-  --checkpoint logs/rsl_rl/base_locomotion_e0_46d/<run>/model_<N>.pt --num_envs 1
+  --checkpoint logs/rsl_rl/base_locomotion_e0_v2_46d/<run>/model_<N>.pt --num_envs 1
 ```
 
 每次实验报告至少包含目的、代码版本、配置/seed、W&B URL 或 offline id、日志与模型路径、验证指标、失败原因和下一步。历史报告数值保留，不用当前配置重解释旧结果；只引用机器输出，不手工改写指标。

@@ -18,7 +18,8 @@ def test_e0_training_contract_keeps_the_46d_actor() -> None:
     validate_training_config(config)
     assert ACTOR_INPUT_DIM == 46
     assert config.actor_observation_dim == 46
-    assert config.protocol_version == "E0-v1-46d"
+    assert config.protocol_version == "E0-v2-46d"
+    assert config.env.action_contract == "servo_range_v2"
     assert set(config.curriculum) == {"terrain_levels", "motion_family", "robustness_bin"}
 
 

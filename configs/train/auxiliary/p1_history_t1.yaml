@@ -1,6 +1,6 @@
 extends: ../main/b0_t1_ppo.yaml
 
-protocol_version: E0-v1-P1-history
+protocol_version: E0-v2-P1-history
 actor_observation_dim: 184
 task: Base-Locomotion-Stackforce-Quadrupedal-History-v0
 
@@ -8,4 +8,4 @@ agent:
   run_name: p1_history_t1_foundation_seed${env.seed}
 
 wandb:
-  group: e0-p1-history-t1
+  group: e0v2-p1-history-t1

@@ -7,7 +7,15 @@ Each registered experiment has one directly executable training configuration:
 - matrix: `configs/experiments/e0_experiments.yaml`
 - command generator: `scripts/e0_experiment_commands.py`
 - four-stage scheduler: `scripts/run_e0_training.sh`
-- shared contract: `configs/train/base_locomotion_e0_46d.yaml`
+- formal E0-v2 long run with preflight: `scripts/run_e0_v2_long_run.sh`
+- shared contract: `configs/train/base_locomotion_e0_46d.yaml` (`protocol_version: E0-v2-46d`)
+
+Since 2026-10-13 the shared contract is **E0-v2-46d**: leg actions span the
+DS041MG servo travel around a new default stance (see
+[ACTION_RANGE_THROUGHPUT_FIX_PLAN.md](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)).
+Runs go to `logs/rsl_rl/base_locomotion_e0_v2_46d/` and W&B groups prefixed
+`e0v2-`. E0-v1 checkpoints (`base_locomotion_e0_46d/`) are evaluation-only;
+resuming them under E0-v2 fails the checkpoint contract.
 
 Run commands from the repository root with the Isaac Lab Python environment.
 
@@ -74,6 +82,24 @@ Commands and subprocess output are retained in
 also recorded in the adjacent JSON manifest. A failed stage stops the lineage
 without deleting its run directory or checkpoint files.
 
+For the formal matrix the scheduler also:
+
+- **T1 terrain-level inheritance.** Each resumed stage starts all environments
+  in the level band `[m-1, m]`, where `m` is the rounded median of
+  `train/terrain/level` over the previous stage's last 100 iterations
+  (`env.terrain_init_level`). `--level-offset 1` starts one level lower if
+  resumes show difficulty jumps.
+- **Stage-end checks** from `configs/experiments/e0_v2_stage_gates.yaml`
+  (plan G8). A failing or missing check stops the lineage with exit code 3
+  and writes `logs/e0_orchestration/<experiment>_seed<seed>_<stage>_gate.json`.
+  Review it, then continue with `--completed-stage <stage>`.
+- **Abort conditions.** A PhysX buffer error in the output, a zero
+  `all_finite`, or `unsafe_termination` above 30 % for 500 rising iterations
+  terminates the stage (exit code 4).
+
+`python scripts/e0_run_health.py --run <run_dir> --stage <stage>` re-checks a
+finished stage; add `--list-tags` to see the logged scalar names.
+
 After Foundation has completed, resume the remaining stages with:
 
 ```bash
@@ -89,6 +115,22 @@ flag. That flag permits only terrain profile/proportion changes. A change to
 observations, actions, rewards, commands, curriculum terms, PPO, or network
 structure still fails the checkpoint contract.
 
+## E0-v2 formal long run (plan G8)
+
+```bash
+bash scripts/run_e0_v2_long_run.sh --preflight-only     # checks only
+bash scripts/run_e0_v2_long_run.sh                      # b2_bisec_full, seed 42, detached
+bash scripts/run_e0_v2_long_run.sh --with-b0-control    # b0_t1_ppo afterwards, never in parallel
+bash scripts/run_e0_v2_long_run.sh --resume-after expansion   # after a reviewed gate pause
+```
+
+Preflight refuses to start unless the config resolves to `E0-v2-46d`,
+`output/fix_plan/G0..G7/gate.json` are PASS (G3 may be CONDITIONAL) with the
+contract upgrade confirmed in G4, no other compute process uses the GPU (T8),
+and no E0-v2 Foundation run of the same experiment/seed exists. The preflight
+record goes to `logs/e0_orchestration/*_preflight_<time>.json`; the command
+prints the output, audit log, manifest, stop command and exit codes.
+
 ## Evaluation
 
 Run the frozen suite after selecting a checkpoint:
@@ -101,4 +143,7 @@ Run the frozen suite after selecting a checkpoint:
 
 The suite evaluates both `union_consolidation` and the DeepRobotics six-family `source_alignment` profile. For P1/P2/P3 checkpoints, set `validation.task` to the checkpoint's registered Gym task through an OmegaConf override.
 
-Legacy checkpoints are evaluation-only. Do not resume them under the E0 v1.1 contract.
+Evaluation scripts pick the action contract from the checkpoint's run
+(`resolved_training_config.yaml`): E0-v1 runs are evaluated with the legacy
+symmetric legs, E0-v2 runs with the servo contract. Legacy checkpoints are
+evaluation-only. Do not resume them under the E0-v2 contract.

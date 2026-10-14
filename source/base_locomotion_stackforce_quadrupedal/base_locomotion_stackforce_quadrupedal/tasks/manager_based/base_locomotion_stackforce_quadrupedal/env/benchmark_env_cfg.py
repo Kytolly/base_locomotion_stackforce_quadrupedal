@@ -31,7 +31,8 @@ class BenchmarkEventsCfg(EventCfg):
     fixed_command = EventTerm(
         func=events.set_fixed_benchmark_command,
         mode="reset",
-        params={"forward_velocity": 0.28, "body_height": 0.105},
+        # body_height=None follows the action contract's nominal height.
+        params={"forward_velocity": 0.28, "body_height": None},
     )
     spawn_track = EventTerm(
         func=spawn_benchmark_track,
@@ -61,9 +62,16 @@ class PlateauBenchmarkEnvCfg(BaseLocomotionComplexEnvCfg):
         self.commands.locomotion.ranges.forward_velocity_mps = (0.28, 0.28)
         self.commands.locomotion.ranges.lateral_velocity_mps = (0.0, 0.0)
         self.commands.locomotion.ranges.yaw_rate_radps = (0.0, 0.0)
-        self.commands.locomotion.ranges.body_height_m = (0.105, 0.105)
+        self.apply_action_contract()
         self.viewer.eye = (4.5, -3.0, 2.8)
         self.viewer.lookat = (0.0, 2.0, 0.25)
+
+
+    def apply_action_contract(self, rebuild_terrain: bool = True) -> None:
+        # Fixed tracks: no generator to rebuild; hold the nominal stance height.
+        super().apply_action_contract(rebuild_terrain=False)
+        nominal = self.nominal_body_height_m
+        self.commands.locomotion.ranges.body_height_m = (nominal, nominal)
 
 
 @configclass

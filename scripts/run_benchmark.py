@@ -117,6 +117,17 @@ def main() -> None:
     )
     env_cfg.seed = int(config.benchmark.seed)
     env_cfg.episode_length_s = float(config.benchmark.get("episode_length_s", 35.0))
+    # Run a checkpoint under the action contract it was trained with (E0-v1 or E0-v2).
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.complex_env_cfg import (
+        apply_e0_env_options,
+        checkpoint_env_options,
+    )
+
+    benchmark_checkpoint = config.policy.get("checkpoint")
+    apply_e0_env_options(
+        env_cfg,
+        checkpoint_env_options(Path(str(benchmark_checkpoint)).expanduser() if benchmark_checkpoint else None),
+    )
     env_cfg.events.spawn_track.params = {
         "kind": str(config.benchmark.kind),
         "seed": int(config.benchmark.seed),

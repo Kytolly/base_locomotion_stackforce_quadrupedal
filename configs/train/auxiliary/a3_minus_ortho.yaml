@@ -6,4 +6,4 @@ agent:
     expert_orthogonality_coef: 0.0
 
 wandb:
-  group: e0-a3-minus-ortho
+  group: e0v2-a3-minus-ortho

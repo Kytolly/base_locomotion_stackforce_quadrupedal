@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import isaaclab.terrains as terrain
 from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
 
@@ -58,6 +60,17 @@ TERRAIN_PROFILES = {
         "hf_pyramid_slope_inv": 0.07,
         COMPOSITION_FAMILY: 0.30,
     },
+    # G6 short probes (fix plan): foundation-like mix plus low steps/boxes; use
+    # with env.obstacle_heights {pyramid_stairs, boxes: [0.02, 0.04]}.
+    "probe_low_steps": {
+        "flat": 0.40,
+        "random_rough": 0.10,
+        "hf_pyramid_slope": 0.08,
+        "wave": 0.08,
+        "hf_pyramid_slope_inv": 0.06,
+        "pyramid_stairs": 0.14,
+        "boxes": 0.14,
+    },
     "source_alignment": {
         "pyramid_stairs": 0.20,
         "pyramid_stairs_inv": 0.20,
@@ -69,16 +82,39 @@ TERRAIN_PROFILES = {
 }
 
 
+# E0-v1 obstacle heights (m).  E0-v2 passes the servo contract's ranges instead
+# (start 0.02 m, cap = min(old cap, 0.8 x measured lift); plan G4).
+LEGACY_OBSTACLE_HEIGHTS = {
+    "pyramid_stairs": (0.04, 0.14),
+    "boxes": (0.03, 0.12),
+    "continuous_steps": (0.03, 0.12),
+}
+
+
 def get_complex_terrain_cfg(
     *,
     seed: int = 42,
     num_rows: int = 8,
     num_cols: int = 12,
     profile: str = "union_expansion",
+    obstacle_heights: Mapping[str, tuple[float, float]] | None = None,
 ) -> TerrainGeneratorCfg:
-    """Return the requested versioned terrain-union generator."""
+    """Return the requested versioned terrain-union generator.
+
+    ``obstacle_heights`` overrides the step/box height ranges by key
+    (``pyramid_stairs``, ``boxes``, ``continuous_steps``); omitted keys keep the
+    E0-v1 values.  Level interpolation inside each range is unchanged.
+    """
     if profile not in TERRAIN_PROFILES:
         raise ValueError(f"Unknown terrain profile {profile!r}; expected one of {sorted(TERRAIN_PROFILES)}.")
+    heights = dict(LEGACY_OBSTACLE_HEIGHTS)
+    for name, bounds in (obstacle_heights or {}).items():
+        if name not in heights:
+            raise KeyError(f"Unknown obstacle height key {name!r}; expected {sorted(heights)}.")
+        low, high = (float(value) for value in bounds)
+        if not 0.0 < low < high:
+            raise ValueError(f"Obstacle height range {name}={bounds} must satisfy 0 < low < high.")
+        heights[name] = (low, high)
     proportions = TERRAIN_PROFILES[profile]
     sub_terrains = {
         "random_rough": terrain.HfRandomUniformTerrainCfg(
@@ -88,13 +124,13 @@ def get_complex_terrain_cfg(
         "boxes": terrain.MeshRandomGridTerrainCfg(
             proportion=proportions.get("boxes", 0.0),
             grid_width=0.45,
-            grid_height_range=(0.03, 0.12),
+            grid_height_range=heights["boxes"],
             platform_width=2.0,
             holes=False,
         ),
         "pyramid_stairs": terrain.MeshPyramidStairsTerrainCfg(
             proportion=proportions.get("pyramid_stairs", 0.0),
-            step_height_range=(0.04, 0.14),
+            step_height_range=heights["pyramid_stairs"],
             step_width=0.35,
             platform_width=2.5,
             border_width=1.0,
@@ -102,7 +138,7 @@ def get_complex_terrain_cfg(
         ),
         "pyramid_stairs_inv": terrain.MeshInvertedPyramidStairsTerrainCfg(
             proportion=proportions.get("pyramid_stairs_inv", 0.0),
-            step_height_range=(0.04, 0.14),
+            step_height_range=heights["pyramid_stairs"],
             step_width=0.35,
             platform_width=2.5,
             border_width=1.0,
@@ -144,6 +180,7 @@ def get_complex_terrain_cfg(
         COMPOSITION_FAMILY: HfContinuousMixedTerrainCfg(
             proportion=proportions.get(COMPOSITION_FAMILY, 0.0),
             border_width=0.5,
+            step_height_range=heights["continuous_steps"],
         ),
     }
     return TerrainGeneratorCfg(
@@ -166,6 +203,7 @@ def get_complex_terrain_cfg(
 __all__ = [
     "COMPOSITION_FAMILY",
     "DEEP_ROBOTICS_TERRAIN_SOURCE",
+    "LEGACY_OBSTACLE_HEIGHTS",
     "TERRAIN_FAMILIES",
     "TERRAIN_PROFILES",
     "TRAINING_TERRAIN_FAMILIES",

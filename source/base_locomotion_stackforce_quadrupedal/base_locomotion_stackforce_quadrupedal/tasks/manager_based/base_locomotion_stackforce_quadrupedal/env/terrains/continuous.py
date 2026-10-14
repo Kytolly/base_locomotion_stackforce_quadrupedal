@@ -20,6 +20,9 @@ class HfContinuousMixedTerrainCfg(HfTerrainBaseCfg):
     rough_height_range: tuple[float, float] = (0.01, 0.05)
     wave_amplitude_range: tuple[float, float] = (0.015, 0.06)
     slope_height_range: tuple[float, float] = (0.03, 0.12)
+    # Box and stair segments (variants 2 and 3).  E0-v1 used the slope range;
+    # E0-v2 caps it from the servo contract like the other step families.
+    step_height_range: tuple[float, float] = (0.03, 0.12)
     route_variant_count: int = 5
 
 
@@ -39,6 +42,7 @@ def continuous_mixed_terrain(
     rough_height = np.interp(difficulty, (0.0, 1.0), cfg.rough_height_range)
     wave_amplitude = np.interp(difficulty, (0.0, 1.0), cfg.wave_amplitude_range)
     slope_height = np.interp(difficulty, (0.0, 1.0), cfg.slope_height_range)
+    step_height = np.interp(difficulty, (0.0, 1.0), cfg.step_height_range)
 
     x_phase = np.linspace(0.0, 2.0 * np.pi, width, endpoint=False)[:, None]
     y_phase = np.linspace(0.0, 4.0 * np.pi, route_length, endpoint=False)[None, :]
@@ -69,7 +73,7 @@ def continuous_mixed_terrain(
         box_pattern = (
             (np.arange(width)[:, None] // 4 + np.arange(route_length)[None, :] // 4) % 3
         ) == 0
-        route[:, boxes] = box_pattern[:, boxes] * slope_height
+        route[:, boxes] = box_pattern[:, boxes] * step_height
     elif variant == 3:  # stairs up -> platform -> stairs down
         up = section(0.15, 0.42)
         platform = section(0.42, 0.62)
@@ -77,9 +81,9 @@ def continuous_mixed_terrain(
         step_count = max(2, int(3 + 4 * difficulty))
         up_values = np.floor(np.linspace(0, step_count, int(up.sum()), endpoint=False)) / step_count
         down_values = np.ceil(np.linspace(step_count, 0, int(down.sum()), endpoint=False)) / step_count
-        route[:, up] = slope_height * up_values
-        route[:, platform] = slope_height
-        route[:, down] = slope_height * down_values
+        route[:, up] = step_height * up_values
+        route[:, platform] = step_height
+        route[:, down] = step_height * down_values
     else:  # rough -> inverted slope -> pit/stepping stones -> recovery flat
         rough = section(0.12, 0.38)
         route[:, rough] = deterministic_rough[:, rough]

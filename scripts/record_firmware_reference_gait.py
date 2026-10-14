@@ -22,6 +22,9 @@ parser.add_argument("--seed", type=int, default=1001)
 parser.add_argument("--terrain-usd", type=Path, default=None, help="Optional USD obstacle terrain.")
 parser.add_argument("--swing-amplitude", type=float, default=0.85, help="Normalized leg lift target.")
 parser.add_argument("--fore-aft-amplitude", type=float, default=0.75, help="Normalized swing fore-aft target.")
+parser.add_argument("--action-contract", choices=("servo_range_v2", "legacy_symmetric"), default="servo_range_v2",
+                    help="The firmware trajectory is defined as absolute hip angles 0.5 x value (E0-v1 units); under "
+                         "servo_range_v2 the same absolute angles are converted to the asymmetric servo action.")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 args.enable_cameras = True
@@ -75,6 +78,8 @@ def firmware_action(phase: float, device: str) -> torch.Tensor:
 def main() -> None:
     cfg = parse_env_cfg(TASK, device=args.device, num_envs=1)
     cfg.seed = args.seed
+    cfg.action_contract = args.action_contract
+    cfg.apply_action_contract(rebuild_terrain=False)
     cfg.episode_length_s = args.duration + 2.0
     if args.terrain_usd is not None:
         if not args.terrain_usd.is_file():
@@ -85,7 +90,8 @@ def main() -> None:
         cfg.curriculum.terrain_levels = None
         cfg.events.reset_root.params["slope_approach_fraction"] = 0.0
         cfg.commands.locomotion.resampling_time_range = (1.0e9, 1.0e9)
-        cfg.actions.leg_position.clip = {".*": (-1.0, 1.0)}
+        if args.action_contract == "legacy_symmetric":
+            cfg.actions.leg_position.clip = {".*": (-1.0, 1.0)}
     env = gym.make(TASK, cfg=cfg, render_mode="rgb_array").unwrapped
     args.output.parent.mkdir(parents=True, exist_ok=True)
     writer = None if args.no_video else imageio.get_writer(
@@ -93,6 +99,19 @@ def main() -> None:
         macro_block_size=1, ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"])
     trace_path = args.output.with_suffix(".jsonl")
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
+    leg_term = env.action_manager.get_term("leg_position")
+
+    def to_env_action(action):
+        """Firmware values are absolute hip angles / 0.5; map them onto the servo action if needed."""
+        if not hasattr(leg_term, "joint_lower"):
+            return action
+        default = leg_term._offset[0]
+        delta = 0.5 * action[:, :8] - default
+        legs = torch.where(
+            delta >= 0, delta / (leg_term.joint_upper[0] - default), delta / (default - leg_term.joint_lower[0])
+        ).clamp(-1.0, 1.0)
+        return torch.cat((legs, action[:, 8:]), dim=1)
+
     feet, _ = env.scene["robot"].find_bodies(list(FOOT_LINKS), preserve_order=True)
     robot = env.scene["robot"]
     initial_y = 0.0
@@ -140,7 +159,7 @@ def main() -> None:
             steps = round(args.duration / env.step_dt)
             for step in range(steps):
                 phase = (step * env.step_dt / PERIOD) % 1.0
-                env.step(firmware_action(phase, env.device))
+                env.step(to_env_action(firmware_action(phase, env.device)))
             final_base_y = float(robot.data.root_pos_w[0, 1])
     finally:
         if writer is not None:

@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,16 @@ def test_formal_matrix_has_20k_cumulative_endpoints():
         cumulative.append(total - 1)
     assert iterations == [1000, 5000, 7000, 7000]
     assert cumulative == [999, 5999, 12999, 19999]
+
+
+def test_formal_experiments_use_v2_run_labels():
+    spec = importlib.util.spec_from_file_location("_orchestrator", ORCHESTRATOR)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert module._run_name("b0_t1_ppo", "foundation", 7) == "simplePPOv2-foundation-seed07"
+    assert module._run_name("b2_bisec_full", "consolidation", 42) == "BiSECv2-consolidation-seed42"
+    assert module._run_name("smoke", "foundation", 7) == "smoke_foundation_seed7"
 
 
 def _fixture(tmp_path: Path, *, fail_stage: str | None = None):
@@ -137,3 +148,50 @@ def test_resume_rejects_incomplete_checkpoint(tmp_path):
     result = _run(matrix, trainer, env, "--completed-stage", "foundation")
     assert result.returncode != 0
     assert "No valid" in result.stderr
+
+
+def _fixture_with_scalars(tmp_path: Path, level: float, saturation: float):
+    """Fake trainer that also logs TensorBoard scalars like the real metrics wrapper."""
+    matrix, trainer, log_root, env = _fixture(tmp_path)
+    source = trainer.read_text(encoding="utf-8")
+    source += f"""
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter(str(run))
+for it in range(start, final + 1):
+    writer.add_scalar('train/terrain/level', {level}, it)
+    writer.add_scalar('train/actuation/leg_saturation_rate', {saturation}, it)
+    writer.add_scalar('train/runtime/all_finite', 1.0, it)
+writer.close()
+"""
+    trainer.write_text(source, encoding="utf-8")
+    spec = tmp_path / "gates.yaml"
+    spec.write_text(yaml.safe_dump({
+        "schema_version": 1,
+        "stages": {
+            "foundation": [{"name": "leg_saturation_rate", "tags": ["train/actuation/leg_saturation_rate"],
+                            "stat": "tail_mean", "window": 300, "op": "<", "value": 0.15}],
+            "expansion": [], "composition": [], "consolidation": [],
+        },
+        "abort": {"finite_tags": ["train/runtime/all_finite"], "unsafe_tags": [], "unsafe_window": 500, "unsafe_limit": 0.3},
+    }), encoding="utf-8")
+    return matrix, trainer, log_root, env, spec
+
+
+def test_t1_passes_inherited_level_to_resumed_stages(tmp_path):
+    matrix, trainer, log_root, env, spec = _fixture_with_scalars(tmp_path, level=4.4, saturation=0.05)
+    result = _run(matrix, trainer, env, "--level-inheritance", "on", "--gates", "on",
+                  "--gate-spec", str(spec), "--abort-monitor", "off")
+    assert result.returncode == 0, result.stderr
+    runs = sorted((log_root / "test_e0").iterdir(), key=lambda p: p.stat().st_mtime_ns)
+    first = json.loads((runs[0] / "invocation.json").read_text())
+    assert "env.terrain_init_level" not in first
+    for run in runs[1:]:
+        assert json.loads((run / "invocation.json").read_text())["env.terrain_init_level"] == "4"
+
+
+def test_failed_stage_gate_pauses_the_lineage(tmp_path):
+    matrix, trainer, log_root, env, spec = _fixture_with_scalars(tmp_path, level=2.0, saturation=0.4)
+    result = _run(matrix, trainer, env, "--gates", "on", "--gate-spec", str(spec), "--abort-monitor", "off")
+    assert result.returncode == 3
+    assert "--completed-stage foundation" in result.stderr
+    assert len(list((log_root / "test_e0").iterdir())) == 1

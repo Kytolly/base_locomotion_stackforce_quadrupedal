@@ -132,6 +132,25 @@ def _without_terrain_mix(payload: Any) -> Any:
     return result
 
 
+def checkpoint_action_contract(checkpoint: Path | None, default: str = "servo_range_v2") -> str:
+    """Return the action contract a checkpoint was trained with.
+
+    Reads ``env.action_contract`` from the run's ``resolved_training_config.yaml``.
+    Runs from before E0-v2 have no such key and used the legacy symmetric
+    +-0.5 rad legs; a missing config falls back to ``default``.
+    """
+    if checkpoint is None:
+        return default
+    path = Path(checkpoint).parent / "resolved_training_config.yaml"
+    if not path.is_file():
+        return default
+    config = OmegaConf.load(path)
+    contract = OmegaConf.select(config, "env.action_contract", default=None)
+    if contract is not None:
+        return str(contract)
+    return "servo_range_v2" if str(config.get("protocol_version", "")) == "E0-v2-46d" else "legacy_symmetric"
+
+
 def resume_training_runner(runner: Any, checkpoint: str) -> None:
     """Resume after the saved zero-based update, including Adam and adaptive LR."""
     runner.load(checkpoint)

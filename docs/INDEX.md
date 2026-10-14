@@ -4,10 +4,10 @@
 
 ## 当前结论
 
-截至 2026-10-09，当前主线为 `E0-v1-46d`，最终模型使用 `configs/train/main/b2_bisec_full.yaml` 和任务 `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0`。环境、接口、训练指标和固定验证流程已实现，但不等于策略性能通过验收：
+截至 2026-10-13，主线合同升级为 `E0-v2-46d`：腿部动作范围按 DS041MG 舵机真实行程 ×0.9 推导、默认站姿改为实机可达姿态，并加入吞吐优化开关和长训门控（见 [动作范围修复计划](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md) §7）。代码已实现，**G0–G7 门控尚无运行证据，E0-v2 尚未训练**；动作合同目前是 §3A 的临时值，G3 实测后重建。E0-v1 的 b0/b2 checkpoint 只作对照。最终模型仍使用 `configs/train/main/b2_bisec_full.yaml` 和任务 `Base-Locomotion-Stackforce-Quadrupedal-Complex-v0`。环境、接口、训练指标和固定验证流程已实现，但不等于策略性能通过验收：
 
 - 机器人使用包内 `stackforce_quadrupedal_wheeled_robot_closed.usda`；
-- 12 个主动关节按 8 个腿部位置动作和 4 个轮速度动作分组；
+- 12 个主动关节按 8 个腿部位置动作和 4 个轮速度动作分组；E0-v2 的腿部动作为站姿附近的逐关节非对称范围（`mdp/action/e0_v2_servo_contract.json`）；
 - 8 个膝关节保持被动，4 个 closure joint 保持物理闭环约束；
 - policy observation 已按 4 维 Decision、30 维本体感知和 12 维上一动作组成 46 维，command 和 reward 共用 Command Manager 输出；
 - critic 额外读取 16 维当前特权真值；特权量不进入 policy observation；
@@ -19,9 +19,9 @@
 ## 代码目录职责
 
 ```text
-env/robots/                 机器人资产路径、关节分组和 articulation 配置
+env/robots/                 机器人资产路径、关节分组、articulation 配置和五连杆运动学
 env/terrains/               程序化地形族和 terrain generator 配置
-mdp/action/                 动作顺序、缩放和裁剪合同
+mdp/action/                 动作顺序、缩放和裁剪合同；E0-v2 舵机范围合同与非对称位置动作
 mdp/policy/                 策略指令状态、采样和观测项
 mdp/observation/proprioception/  30 维可部署本体感知
 mdp/observation/history/         12 维上一动作单步记忆
@@ -54,6 +54,7 @@ benchmark/washboard_track/  washboard 固定赛道参数与 USD/PhysX 生成
 10. [仓库根目录 locomotion 规范](../../doc/locomotion/base_locomotion_spec.md)
 11. [参考任务执行闭环](../../demo_wheel_leg_switching/docs/RL_CLOSED_LOOP.md)
 12. [E0 全实验与长训命令](E0_EXPERIMENT_COMMANDS.md)
+13. [动作范围修复与训练吞吐优化计划](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)（2026-10-14，v3.7：G0–G7 已验收，长训预检通过）
 
 历史证据与专项诊断：[控制修正与重启](CONTROL_RESTART.md)、[并行规模实测](TRAINING_SCALE_REPORT.md)、[台阶探针](STAIR_PROBE.md)、[2026-10-02 台阶结果](STAIR_PROBE_RESULTS_2026-10-02.md)。日期报告仅适用于其记录的 checkpoint 和测试条件，不代表当前 E0 run。
 

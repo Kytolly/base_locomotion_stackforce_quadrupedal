@@ -8,12 +8,27 @@ claims refer to the loaded simulation asset and its configured actuators.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.metadata as metadata
 import itertools
 import json
 import math
+import os
 from pathlib import Path
+import sys
+
+
+# Isaac Sim may load its bundled CUDA runtime before PyTorch.  Preload the
+# active environment's CUDA 13 NVRTC libraries so scripted quaternion math can
+# JIT-compile on the same installation used by training and the G3 probes.
+_CUDA_LIB = Path(sys.prefix) / "lib/python3.12/site-packages/nvidia/cu13/lib"
+if _CUDA_LIB.is_dir():
+    for _name in ("libnvrtc-builtins.so.13.0", "libnvrtc.so.13"):
+        _path = _CUDA_LIB / _name
+        if _path.is_file():
+            ctypes.CDLL(str(_path), mode=ctypes.RTLD_GLOBAL)
+    os.environ["LD_LIBRARY_PATH"] = f"{_CUDA_LIB}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
 
 def parse_args():
@@ -44,6 +59,9 @@ def parse_args():
     parser.add_argument("--scan-report", type=Path, help="Reuse a scan from this probe, with matching action limit.")
     parser.add_argument("--five-phase", action="store_true", help="Run the staged five-phase obstacle maneuver.")
     parser.add_argument("--seed", type=int, default=1001)
+    parser.add_argument("--action-contract", choices=("auto", "servo_range_v2", "legacy_symmetric"), default="auto",
+                        help="auto: the checkpoint's contract, else servo_range_v2 (E0-v2). Scripted motions are "
+                             "joint offsets in rad (legacy raw units x 0.5) around the contract's default stance.")
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
     for name in ("step_height", "tread", "approach", "speed", "advance_time", "recovery_time", "duration", "leg_limit"):
@@ -51,8 +69,8 @@ def parse_args():
             parser.error(f"--{name.replace('_', '-')} must be finite and positive")
     if args.step_count < 1 or args.grid < 3 or args.grid % 2 != 1:
         parser.error("--step-count must be positive; --grid must be odd and at least 3")
-    if args.leg_limit > 1.4:
-        parser.error("--leg-limit must be <= 1.4 rad (inside the asset's +/-1.57 rad limits)")
+    if args.leg_limit > 2.5:
+        parser.error("--leg-limit must be <= 2.5 rad; the action contract clamps targets to its own ranges")
     if args.checkpoint is not None and not args.checkpoint.is_file():
         parser.error(f"checkpoint does not exist: {args.checkpoint}")
     if args.fixed_base and args.skip_scan:
@@ -125,6 +143,16 @@ class Probe:
         self.feet, _ = self.robot.find_bodies(list(FOOT_LINKS), preserve_order=True)
         self.radius = WHEEL_RADIUS_M
         self.action = torch.zeros((1, 12), device=env.device)
+        # E0-v2: scripted actions stay "rad offset / 0.5" around the stance; convert them
+        # to the asymmetric servo raw range before stepping.  Policy actions pass through.
+        self.servo_span = None
+        self.default_leg_target = None
+        leg_term = env.action_manager.get_term("leg_position")
+        if hasattr(leg_term, "joint_lower"):
+            default = leg_term._offset[0]
+            self.default_leg_target = default
+            self.servo_span = (default - leg_term.joint_lower[0], leg_term.joint_upper[0] - default)
+        self.body_height = float(getattr(env.cfg, "nominal_body_height_m", 0.105))
         self.state = None
         self.samples = []
         self.trial = ""
@@ -166,8 +194,13 @@ class Probe:
             return False
         self.phase = phase
         self.action = action.clone()
-        command = self.torch.tensor([[self.args.speed, 0, 0, 0.105]], device=self.env.device)
+        command = self.torch.tensor([[self.args.speed, 0, 0, self.body_height]], device=self.env.device)
         self.env.command_manager.get_term("locomotion").set_command(command)
+        if self.servo_span is not None and phase != "policy":
+            below, above = self.servo_span
+            delta = 0.5 * action[:, :8]
+            legs = self.torch.where(delta >= 0, delta / above, delta / below).clamp(-1.0, 1.0)
+            action = self.torch.cat((legs, action[:, 8:]), dim=1)
         _, _, terminated, truncated, _ = self.env.step(action)
         self.done = bool((terminated | truncated)[0])
         return not self.done
@@ -196,14 +229,33 @@ class Probe:
         candidates = {}
         limit = self.args.leg_limit / 0.5
         values = self.torch.linspace(-limit, limit, self.args.grid).tolist()
-        lifts = json.loads(self.args.lift_report.read_text())["clearance_scan"] if self.args.lift_report else None
+        lifts = None
+        if self.args.lift_report:
+            saved_lifts = json.loads(self.args.lift_report.read_text())
+            if "clearance_scan" in saved_lifts:
+                lifts = {
+                    name: saved_lifts["clearance_scan"][name]["best"]["action_pair"]
+                    for name in LEGS
+                }
+            elif "legs" in saved_lifts and self.default_leg_target is not None:
+                # G3 lift.json stores absolute hip targets.  Scripted actions
+                # use the legacy-compatible convention delta_rad / 0.5.
+                lifts = {
+                    name: [
+                        (saved_lifts["legs"][name]["outer_rad"] - float(self.default_leg_target[index])) / 0.5,
+                        (saved_lifts["legs"][name]["inner_rad"] - float(self.default_leg_target[index + 4])) / 0.5,
+                    ]
+                    for index, name in enumerate(LEGS)
+                }
+            else:
+                raise ValueError("--lift-report must contain clearance_scan or G3 legs data")
         for leg, name in enumerate(LEGS):
             trials = []
             supports = [(0.0, 0.0)]
             if self.args.support_search:
                 supports += list(itertools.product((-0.5, 0, 0.5), repeat=2))
                 supports = list(dict.fromkeys(supports))
-            pairs = [lifts[name]["best"]["action_pair"]] if lifts else list(itertools.product(values, repeat=2))
+            pairs = [lifts[name]] if lifts else list(itertools.product(values, repeat=2))
             for (outer, inner), support in itertools.product(pairs, supports):
                 if outer == inner == 0:
                     continue
@@ -225,21 +277,31 @@ class Probe:
                     if not self.step(action, "hold"):
                         break
                 held = [s for s in self.samples if s["phase"] == "hold"]
-                valid = bool(held) and not self.done and all(
+                # A rigid four-wheel chassis is statically over-constrained;
+                # tiny pose errors commonly leave only a diagonal pair carrying
+                # measurable load.  Require the lifted wheel to be unloaded and
+                # at least two other wheels to remain loaded throughout the hold.
+                # The final gate still requires an actual clean step crossing.
+                support_count_min = min(
+                    (sum(s["contact_force_n"][other] > 1.0 for other in range(4) if other != leg)
+                     for s in held),
+                    default=0,
+                )
+                valid = bool(held) and not self.done and support_count_min >= 2 and all(
                     s["tilt_rad"] < 0.35 and s["contact_force_n"][leg] < 1.0
-                    and all(s["contact_force_n"][other] > 1.0 for other in range(4) if other != leg)
                     for s in held
                 )
                 clearance = min((s["feet_xyz"][leg][2] - self.radius for s in held), default=0)
                 relative_lift = min((s["feet_body_xyz"][leg][2] - baseline["feet_body_xyz"][leg][2] for s in held), default=0)
-                result = {"action_pair": [outer, inner], "stable_three_supports": valid,
+                result = {"action_pair": [outer, inner], "stable_free_base_support": valid,
+                          "minimum_loaded_support_wheels": support_count_min,
                           "support_pair": list(support), "full_action": action[0].tolist(),
                           "sustained_clearance_m": clearance, "body_relative_lift_m": relative_lift,
                           "terminated": self.done, "trial": self.trial}
                 result["sustained_clearance_gain_m"] = min(
                     (s["feet_xyz"][leg][2] - baseline["feet_xyz"][leg][2] for s in held), default=0)
                 trials.append(result)
-            qualified = [t for t in trials if (t["stable_three_supports"] or self.args.fixed_base and not t["terminated"])
+            qualified = [t for t in trials if (t["stable_free_base_support"] or self.args.fixed_base and not t["terminated"])
                          and t["body_relative_lift_m"] > 0.005]
             best = max(qualified, key=lambda t: t["body_relative_lift_m"] if self.args.fixed_base else t["sustained_clearance_m"], default=None)
             fallback = max((t for t in trials if not t["terminated"]), key=lambda t: t["body_relative_lift_m"], default=None)
@@ -438,16 +500,29 @@ def main(args):
     write_terrain(terrain, args)
     cfg = parse_env_cfg(TASK, device=args.device, num_envs=1)
     cfg.seed = args.seed
+    if args.action_contract == "auto":
+        from base_locomotion_stackforce_quadrupedal.training.checkpoint import checkpoint_action_contract
+
+        args.action_contract = checkpoint_action_contract(args.checkpoint)
+    cfg.action_contract = args.action_contract
+    cfg.apply_action_contract(rebuild_terrain=False)
     cfg.scene.terrain = TerrainImporterCfg(prim_path="/World/ground", terrain_type="usd", usd_path=str(terrain),
                                            collision_group=-1, env_spacing=4.0, debug_vis=False)
+    # This probe replaces the generated terrain with one fixed USD obstacle.
+    # None of the training curricula are meaningful here; robustness_bin in
+    # particular reads TerrainImporter.terrain_levels, which a USD importer
+    # intentionally does not provide.
     cfg.curriculum.terrain_levels = None
+    cfg.curriculum.motion_family = None
+    cfg.curriculum.robustness_bin = None
     cfg.episode_length_s = args.duration + 5
     for name in ("randomize_contact_material", "randomize_base_mass", "randomize_actuator_gains"):
         setattr(cfg.events, name, None)
     cfg.events.reset_root.params["slope_approach_fraction"] = 0.0
     cfg.commands.locomotion.resampling_time_range = (1e9, 1e9)
     cfg.observations.policy.enable_corruption = False
-    cfg.actions.leg_position.clip = {".*": (-args.leg_limit, args.leg_limit)}
+    if args.action_contract == "legacy_symmetric":
+        cfg.actions.leg_position.clip = {".*": (-args.leg_limit, args.leg_limit)}
     if args.fixed_base:
         cfg.scene.robot.spawn.articulation_props.fix_root_link = None
         cfg.scene.robot.init_state.pos = (0, 0, 0.3)
@@ -477,7 +552,10 @@ def main(args):
               "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
               "mechanical_impossibility": "not_established_by_finite_search", "free_base": not args.fixed_base,
               "root_teleport_during_trial": False, "actuator_limits_modified": False,
-              "policy_action_limit_rad": 0.5, "scripted_action_limit_rad": args.leg_limit,
+              "action_contract": args.action_contract,
+              "nominal_body_height_m": float(cfg.nominal_body_height_m),
+              "policy_action_limit_rad": 0.5 if args.action_contract == "legacy_symmetric" else "servo_contract_ranges",
+              "scripted_action_limit_rad": args.leg_limit,
               "trace": str(output.with_suffix(".jsonl")), "terrain": str(terrain)}
     try:
         with output.with_suffix(".jsonl").open("w", encoding="utf-8") as trace:
@@ -493,8 +571,8 @@ def main(args):
             report["clearance_scan"] = candidates
             report["manual"] = (probe.five_phase_obstacle(candidates) if args.five_phase else probe.manual(candidates)) if candidates and not args.fixed_base else {"status": "not_requested"}
             if candidates and not args.fixed_base:
-                report["manual"]["all_lifts_prevalidated_on_three_supports"] = all(
-                    candidates[name]["best"] is not None and candidates[name]["best"]["stable_three_supports"]
+                report["manual"]["all_lifts_prevalidated_with_free_base_support"] = all(
+                    candidates[name]["best"] is not None and candidates[name]["best"]["stable_free_base_support"]
                     for name in LEGS
                 )
             report["rolling"] = probe.rolling_or_policy() if not args.fixed_base else {"status": "not_applicable_fixed_base"}

@@ -239,6 +239,12 @@ def main() -> None:
         env_cfg.scene.terrain.terrain_generator = get_complex_terrain_cfg(
             seed=int(config.env.seed), profile=env_cfg.terrain_profile
         )
+    # E0-v2: action contract (G4), T1 initial terrain level and G5 throughput switches.
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.complex_env_cfg import (
+        apply_e0_env_options,
+    )
+
+    apply_e0_env_options(env_cfg, OmegaConf.to_container(config.env, resolve=True))
     if config.get("curriculum"):
         apply_config(env_cfg.curriculum, config.curriculum, "curriculum")
         if terrain_generator := getattr(env_cfg.scene.terrain, "terrain_generator", None):

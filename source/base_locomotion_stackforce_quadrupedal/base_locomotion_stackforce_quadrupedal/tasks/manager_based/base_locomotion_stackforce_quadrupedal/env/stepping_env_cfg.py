@@ -15,6 +15,11 @@ class SteppingSceneCfg(ComplexSceneCfg):
 class SteppingCapabilityEnvCfg(BaseLocomotionComplexEnvCfg):
     scene: SteppingSceneCfg = SteppingSceneCfg(num_envs=1, env_spacing=4.0, replicate_physics=False)
 
+    def apply_action_contract(self, rebuild_terrain: bool = True) -> None:
+        super().apply_action_contract(rebuild_terrain=False)
+        nominal = self.nominal_body_height_m
+        self.commands.locomotion.ranges.body_height_m = (nominal, nominal)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.scene.terrain = get_flat_terrain_cfg()
@@ -25,7 +30,8 @@ class SteppingCapabilityEnvCfg(BaseLocomotionComplexEnvCfg):
         self.commands.locomotion.ranges.forward_velocity_mps = (0.20, 0.20)
         self.commands.locomotion.ranges.lateral_velocity_mps = (0.0, 0.0)
         self.commands.locomotion.ranges.yaw_rate_radps = (0.0, 0.0)
-        self.commands.locomotion.ranges.body_height_m = (0.105, 0.105)
+        nominal = self.nominal_body_height_m
+        self.commands.locomotion.ranges.body_height_m = (nominal, nominal)
         for name in ("randomize_contact_material", "randomize_base_mass", "randomize_actuator_gains"):
             setattr(self.events, name, None)
 

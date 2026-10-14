@@ -60,8 +60,25 @@ def _actuator(joints: tuple[str, ...], effort: float, velocity: float, stiffness
     )
 
 
-def create_robot_articulation_cfg(prim_path: str = "{ENV_REGEX_NS}/Robot") -> ArticulationCfg:
-    """Create the 12-active-joint closed-loop articulation configuration."""
+LEGACY_INIT_JOINT_POS = {".*": 0.0}
+LEGACY_INIT_ROOT_HEIGHT_M = 0.11
+
+
+def create_robot_articulation_cfg(
+    prim_path: str = "{ENV_REGEX_NS}/Robot",
+    *,
+    init_joint_pos: dict[str, float] | None = None,
+    init_root_height_m: float = LEGACY_INIT_ROOT_HEIGHT_M,
+    enabled_self_collisions: bool = True,
+    solver_position_iteration_count: int = 8,
+) -> ArticulationCfg:
+    """Create the 12-active-joint closed-loop articulation configuration.
+
+    ``init_joint_pos`` is the default stance (the E0-v1 stance is all zeros);
+    E0-v2 passes the servo-contract hips and closure-consistent passive knees.
+    ``enabled_self_collisions`` and ``solver_position_iteration_count`` are the
+    G5 throughput switches T2/T3; the defaults are the E0-v1 values.
+    """
     return ArticulationCfg(
         prim_path=prim_path,
         articulation_root_prim_path=None,
@@ -78,14 +95,14 @@ def create_robot_articulation_cfg(prim_path: str = "{ENV_REGEX_NS}/Robot") -> Ar
                 max_depenetration_velocity=5.0,
             ),
             articulation_props=ArticulationRootPropertiesCfg(
-                enabled_self_collisions=True,
-                solver_position_iteration_count=8,
+                enabled_self_collisions=enabled_self_collisions,
+                solver_position_iteration_count=solver_position_iteration_count,
                 solver_velocity_iteration_count=1,
             ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.11),
-            joint_pos={".*": 0.0},
+            pos=(0.0, 0.0, float(init_root_height_m)),
+            joint_pos=dict(init_joint_pos or LEGACY_INIT_JOINT_POS),
             joint_vel={".*": 0.0},
         ),
         actuators={

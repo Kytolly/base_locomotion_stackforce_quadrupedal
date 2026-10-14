@@ -16,9 +16,18 @@ class SquashedGaussianDistribution(GaussianDistribution):
     """
 
     def __init__(self, output_dim, init_std=0.3, std_type="log", min_std=0.05, max_std=0.5):
-        if std_type != "log" or not 0 < min_std <= init_std <= max_std:
+        per_dim = [float(v) for v in init_std] if isinstance(init_std, (list, tuple)) else None
+        values = per_dim if per_dim is not None else [float(init_std)]
+        if std_type != "log" or not all(0 < min_std <= v <= max_std for v in values):
             raise ValueError("Use log std with 0 < min_std <= init_std <= max_std.")
-        super().__init__(output_dim, init_std, std_type)
+        if per_dim is not None and len(per_dim) != output_dim:
+            raise ValueError(f"Per-dimension init_std has {len(per_dim)} entries for {output_dim} outputs.")
+        super().__init__(output_dim, values[0], std_type)
+        if per_dim is not None:
+            # E0-v2: legs and wheels start with different latent noise so the
+            # initial physical joint noise matches the old contract (plan G4).
+            with torch.no_grad():
+                self.log_std_param.copy_(torch.log(torch.tensor(per_dim, dtype=self.log_std_param.dtype)))
         self.min_std, self.max_std = min_std, max_std
 
     def update(self, mlp_output):

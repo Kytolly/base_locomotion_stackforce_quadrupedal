@@ -9,4 +9,4 @@ agent:
   run_name: fixed_curriculum_full_foundation_seed${env.seed}
 
 wandb:
-  group: e0-fixed-curriculum-full
+  group: e0v2-fixed-curriculum-full

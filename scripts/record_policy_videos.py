@@ -71,7 +71,7 @@ def main() -> None:
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
     from isaacsim.core.rendering_manager import ViewportManager
-    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import TERRAIN_FAMILIES
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.terrains import TRAINING_TERRAIN_FAMILIES
 
     base = env.unwrapped
     robot = base.scene["robot"]
@@ -99,7 +99,7 @@ def main() -> None:
         command = base.command_manager.get_command("locomotion")[selected].tolist()
         label = args.kind
         if args.kind == "training":
-            label += " / " + TERRAIN_FAMILIES[int(base.scene.terrain.terrain_types[selected])]
+            label += " / " + TRAINING_TERRAIN_FAMILIES[int(base.scene.terrain.terrain_types[selected])]
         draw.rectangle((0, 0, image.width, 68), fill=(20, 24, 27))
         draw.text((18, 8), f"20k policy | {label} | t={step * base.step_dt:.2f}s", font=font, fill="white")
         draw.text((18, 36), f"command: forward {command[0]:+.2f} m/s   lateral {command[1]:+.2f} m/s   yaw {command[2]:+.2f} rad/s", font=font, fill="white")

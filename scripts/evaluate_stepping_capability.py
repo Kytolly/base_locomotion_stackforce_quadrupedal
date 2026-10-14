@@ -45,7 +45,7 @@ def run_mode(mode: str, task_env, vec, policy, steps: int, command_speed: float)
     feet, _ = robot.find_bodies(list(FOOT_LINKS), preserve_order=True)
     env.reset(seed=args.seed)
     policy.reset(torch.ones(1, dtype=torch.long, device=env.device))
-    command = torch.tensor([[command_speed, 0.0, 0.0, 0.105]], device=env.device)
+    command = torch.tensor([[command_speed, 0.0, 0.0, float(env.cfg.nominal_body_height_m)]], device=env.device)
     env.command_manager.get_term("locomotion").set_command(command)
     contacts = [[] for _ in LEGS]
     rel_y = [[] for _ in LEGS]
@@ -119,6 +119,12 @@ def main() -> None:
         raise FileNotFoundError(args.checkpoint)
     cfg = parse_env_cfg(TASK, device=args.device, num_envs=1)
     cfg.seed = args.seed
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.complex_env_cfg import (
+        apply_e0_env_options,
+        checkpoint_env_options,
+    )
+
+    apply_e0_env_options(cfg, checkpoint_env_options(args.checkpoint))
     cfg.episode_length_s = args.steps * float(cfg.sim.dt) * int(cfg.decimation)
     cfg.commands.locomotion.resampling_time_range = (1e9, 1e9)
     cfg.curriculum.terrain_levels = None

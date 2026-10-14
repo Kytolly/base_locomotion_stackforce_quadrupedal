@@ -8,4 +8,4 @@ agent:
     hidden_dims: [208, 208]
 
 wandb:
-  group: e0-a4-ppo-active-capacity
+  group: e0v2-a4-ppo-active-capacity

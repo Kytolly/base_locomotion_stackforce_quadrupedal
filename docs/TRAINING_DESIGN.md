@@ -1,6 +1,6 @@
 # 当前仿真训练设计
 
-本文说明 `E0-v1-46d` 主线的训练闭环与能力边界。执行命令和日志配置见 [实验协议](EXPERIMENT_PROTOCOL.md)，接口与 reward 数值见 [Policy、Action 与 Reward 合同](POLICY_ACTION_REWARD.md)。
+本文说明 `E0-v2-46d` 主线的训练闭环与能力边界。E0-v2 与 E0-v1 的观测、奖励权重、网络和 PPO 超参数相同，区别只在动作合同：腿部范围改为 DS041MG 舵机真实行程 ×0.9、默认站姿改为可在实机达到的姿态，以及随之变化的高度指令、高度阈值和障碍高度，见 [动作范围修复计划](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)。执行命令和日志配置见 [实验协议](EXPERIMENT_PROTOCOL.md)，接口与 reward 数值见 [Policy、Action 与 Reward 合同](POLICY_ACTION_REWARD.md)。
 
 ## 目标与信息边界
 
@@ -8,7 +8,7 @@
 
 ```text
 4D command + 30D 本体状态 + 12D 上一动作
-  -> 46D Actor -> 8D 腿位置增量 + 4D 轮速度
+  -> 46D Actor -> 8D 腿位置目标（站姿附近的逐关节非对称范围）+ 4D 轮速度
   -> 闭链机器人仿真 -> reward / 安全终止 -> PPO 更新
                           -> episode 指标 / 冻结策略评估
 ```
@@ -27,7 +27,7 @@ Actor 不读取地形扫描、接触标志、足端状态或机身线速度真�
 | Rollout | 每环境 24 步，每 iteration 共 98304 个 transition |
 | 训练预算 | 20000 iterations，checkpoint 间隔 250 |
 | Actor / Critic | 各 `[128, 128]`，ELU |
-| 动作分布 | Squashed Gaussian，latent std 初值 0.3，范围 0.05--0.5 |
+| 动作分布 | Squashed Gaussian，latent std 逐维初始化（由合同较小半区间折算，使初始物理噪声约 0.15 rad；轮 0.3），范围 0.05--0.5 |
 | PPO | 5 epochs，4 minibatches，clip=0.2 |
 | 学习率 | 0.001，adaptive，desired KL=0.01 |
 | 折扣 / GAE | gamma=0.99，lambda=0.95 |
@@ -36,7 +36,9 @@ Actor 不读取地形扫描、接触标志、足端状态或机身线速度真�
 
 ## 地形与课程
 
-八类地形等比例混合：`random_rough`、`boxes`、`pyramid_stairs`、`pyramid_stairs_inv`、`hf_pyramid_slope`、`wave`、`stepping_stones`、`pit`。生成器为 8×8 网格，difficulty 范围 0.0--0.6，初始 terrain level 限于 0--1。它不是固定的“平地 -> 坡道 -> 台阶”顺序课程。
+八类地形等比例混合：`random_rough`、`boxes`、`pyramid_stairs`、`pyramid_stairs_inv`、`hf_pyramid_slope`、`wave`、`stepping_stones`、`pit`。生成器为 8×8 网格，difficulty 范围 0.0--0.6。它不是固定的“平地 -> 坡道 -> 台阶”顺序课程。
+
+E0-v2 中台阶与箱体高度从 0.02 m 起，上限为 min(原上限, 0.8 × G3 实测最小抬腿)；G3 之前上限仍为原值（台阶 0.14 m、箱体与连续路线台阶段 0.12 m）。Foundation 的初始 terrain level 限于 0--1；之后每个阶段续训时，编排器取上一阶段最后 100 个 iteration 的 level 中位数 m，把所有 env 放进 `[m-1, m]`（T1），不再回落到 1 附近。
 
 课程实现分别位于 `mdp/curricula/`：
 

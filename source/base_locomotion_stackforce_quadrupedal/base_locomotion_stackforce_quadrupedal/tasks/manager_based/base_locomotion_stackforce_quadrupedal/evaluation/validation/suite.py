@@ -31,7 +31,7 @@ VALIDATION_TERRAIN_COLUMNS = 15
 
 
 def validation_terrain_layout(
-    profile: str, seed: int
+    profile: str, seed: int, obstacle_heights: dict | None = None
 ) -> tuple[Any, tuple[int, ...]]:
     """Build the real profile and map Isaac terrain columns to family IDs."""
     if profile not in VALIDATION_FAMILIES_BY_PROFILE:
@@ -40,7 +40,10 @@ def validation_terrain_layout(
             f"{sorted(VALIDATION_FAMILIES_BY_PROFILE)}."
         )
     config = get_complex_terrain_cfg(
-        seed=seed, num_cols=VALIDATION_TERRAIN_COLUMNS, profile=profile
+        seed=seed,
+        num_cols=VALIDATION_TERRAIN_COLUMNS,
+        profile=profile,
+        obstacle_heights=obstacle_heights,
     )
     proportions = [float(cfg.proportion) for cfg in config.sub_terrains.values()]
     total = sum(proportions)
@@ -76,19 +79,34 @@ class ValidationScenario:
     requires_continuous_route: bool = False
 
 
-DEFAULT_VALIDATION_SCENARIOS = (
-    ValidationScenario("stop", (0.0, 0.0, 0.0, 0.105)),
-    ValidationScenario("forward", (0.35, 0.0, 0.0, 0.105), True),
-    ValidationScenario("backward", (-0.35, 0.0, 0.0, 0.105)),
-    ValidationScenario("lateral_left", (0.0, 0.10, 0.0, 0.105)),
-    ValidationScenario("lateral_right", (0.0, -0.10, 0.0, 0.105)),
-    ValidationScenario("left_turn", (0.0, 0.0, 0.25, 0.105)),
-    ValidationScenario("right_turn", (0.0, 0.0, -0.25, 0.105)),
-    ValidationScenario("forward_left_turn", (0.35, 0.0, 0.20, 0.105)),
-    ValidationScenario("backward_right_turn", (-0.35, 0.0, -0.20, 0.105)),
-    ValidationScenario("low_body", (0.0, 0.0, 0.0, 0.095)),
-    ValidationScenario("high_body", (0.0, 0.0, 0.0, 0.115)),
-)
+VALIDATION_HEIGHT_OFFSET_M = 0.010
+
+
+def validation_scenarios(nominal_height_m: float = 0.105) -> tuple[ValidationScenario, ...]:
+    """The 11 fixed commands at the action contract's nominal body height.
+
+    E0-v1 used 0.105 m (low/high 0.095/0.115 m); E0-v2 keeps the same
+    +-10 mm low/high offsets around the new stance height.
+    """
+    h = float(nominal_height_m)
+    low, high = h - VALIDATION_HEIGHT_OFFSET_M, h + VALIDATION_HEIGHT_OFFSET_M
+    return (
+        ValidationScenario("stop", (0.0, 0.0, 0.0, h)),
+        ValidationScenario("forward", (0.35, 0.0, 0.0, h), True),
+        ValidationScenario("backward", (-0.35, 0.0, 0.0, h)),
+        ValidationScenario("lateral_left", (0.0, 0.10, 0.0, h)),
+        ValidationScenario("lateral_right", (0.0, -0.10, 0.0, h)),
+        ValidationScenario("left_turn", (0.0, 0.0, 0.25, h)),
+        ValidationScenario("right_turn", (0.0, 0.0, -0.25, h)),
+        ValidationScenario("forward_left_turn", (0.35, 0.0, 0.20, h)),
+        ValidationScenario("backward_right_turn", (-0.35, 0.0, -0.20, h)),
+        ValidationScenario("low_body", (0.0, 0.0, 0.0, round(low, 4))),
+        ValidationScenario("high_body", (0.0, 0.0, 0.0, round(high, 4))),
+    )
+
+
+# E0-v1 suite, kept for existing callers; use validation_scenarios(env_cfg.nominal_body_height_m).
+DEFAULT_VALIDATION_SCENARIOS = validation_scenarios(0.105)
 
 
 CORE_FAMILY_METRICS = (

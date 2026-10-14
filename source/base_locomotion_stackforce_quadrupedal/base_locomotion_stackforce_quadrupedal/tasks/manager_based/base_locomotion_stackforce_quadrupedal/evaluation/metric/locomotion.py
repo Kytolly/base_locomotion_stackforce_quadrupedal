@@ -6,7 +6,8 @@ from collections.abc import Sequence
 
 import torch
 
-from ...env.robots import LEG_JOINTS, WHEEL_JOINTS
+from ...env.robots import LEG_JOINTS, LEG_ORDER, WHEEL_JOINTS
+from . import actuation as actuation_terms
 from ...env.terrains import COMPOSITION_FAMILY, TERRAIN_FAMILIES, TRAINING_TERRAIN_FAMILIES
 from ...mdp.action import LEG_ACTION_SLICE, WHEEL_ACTION_SLICE
 from ...mdp.policy.commands import (
@@ -24,6 +25,9 @@ from base_locomotion_stackforce_quadrupedal.evaluation.metric.logging import (
 
 
 ROUTE_ROLE_NAMES = ("single", "entry", "interior", "exit_recovery")
+# G1: the loop-closure residual needs body poses; sample it every N control steps.
+CLOSURE_SAMPLE_PERIOD = 10
+TORQUE_WINDOW_S = 1.0
 CONTINUOUS_ROUTE_CHECKPOINTS_M = (1.0, 2.5, 3.5)
 CONTINUOUS_ROUTE_HALF_WIDTH_M = 1.5
 
@@ -40,6 +44,7 @@ class LocomotionEpisodeMetrics:
         env,
         action_saturation_threshold: float = 0.95,
         metric_groups: dict[str, bool] | None = None,
+        closure_sample_period: int = CLOSURE_SAMPLE_PERIOD,
     ) -> None:
         if not 0.0 <= action_saturation_threshold < 1.0:
             raise ValueError("action_saturation_threshold must be in [0, 1).")
@@ -57,6 +62,16 @@ class LocomotionEpisodeMetrics:
             list(WHEEL_JOINTS), preserve_order=True
         )
         self.active_joint_ids = list(self.leg_joint_ids) + list(self.wheel_joint_ids)
+        self.closure_sample_period = max(1, int(closure_sample_period))
+        self._step_counter = 0
+        self._leg_effort_limit = self._effort_limits(robot)
+        self._torque_window = actuation_terms.RollingMean(
+            self.num_envs,
+            len(self.leg_joint_ids),
+            max(1, round(TORQUE_WINDOW_S / self.dt)),
+            self.device,
+        )
+        self._closure = self._closure_geometry(robot)
         self.reward_names = list(env.reward_manager._term_names)
         self.reward_weights = {
             name: float(env.reward_manager._term_cfgs[index].weight)
@@ -119,10 +134,59 @@ class LocomotionEpisodeMetrics:
             "command_feasible_count",
             "continuous_route_ordered_checkpoints",
             "continuous_route_corridor_valid",
+            # G1 actuation diagnostics (plan section G1 / G2-A).
+            "leg_saturation_count",
+            "wheel_saturation_count",
+            "leg_torque_saturation_count",
+            "leg_torque_over_rated_count",
+            "leg_tracking_error_sq",
+            "leg_torque_1s_mean_max",
+            "closure_residual_max_mm",
         )
         self._buffers = {
             name: torch.zeros(self.num_envs, device=self.device) for name in names
         }
+
+    def _effort_limits(self, robot) -> torch.Tensor:
+        limits = getattr(robot.data, "joint_effort_limits", None)
+        if isinstance(limits, torch.Tensor):
+            return limits[:, self.leg_joint_ids].clone()
+        return torch.full((self.num_envs, len(self.leg_joint_ids)), 0.392, device=self.device)
+
+    def _closure_geometry(self, robot) -> dict[str, torch.Tensor] | None:
+        """Closure-frame offsets and axes from the URDF, per leg, in link coordinates."""
+        try:
+            from ...env.robots.kinematics import LegKinematics
+
+            kinematics = LegKinematics()
+            calf_ids, _ = robot.find_bodies([f"{leg}_Inner_Calf_Link" for leg in LEG_ORDER], preserve_order=True)
+            foot_ids, _ = robot.find_bodies([f"{leg}_Foot_Link" for leg in LEG_ORDER], preserve_order=True)
+        except Exception:  # noqa: BLE001 - a missing body only disables this diagnostic
+            return None
+        offsets = [kinematics.joints[f"{leg}_Closure_Frame_Joint"].xyz for leg in LEG_ORDER]
+        axes = [kinematics.joints[f"{leg}_Inner_Knee_Joint"].axis for leg in LEG_ORDER]
+        return {
+            "calf_ids": list(calf_ids),
+            "foot_ids": list(foot_ids),
+            "offset": torch.tensor(offsets, dtype=torch.float32, device=self.device),
+            "axis": torch.tensor(axes, dtype=torch.float32, device=self.device),
+        }
+
+    def _closure_residual_mm(self, robot) -> torch.Tensor | None:
+        if self._closure is None:
+            return None
+        from isaaclab.utils.math import quat_apply
+
+        geometry = self._closure
+        calf_pos = robot.data.body_pos_w[:, geometry["calf_ids"]]
+        calf_quat = robot.data.body_quat_w[:, geometry["calf_ids"]]
+        wheel = robot.data.body_pos_w[:, geometry["foot_ids"]]
+        shape = calf_quat.shape[:2]
+        offset = geometry["offset"].expand(*shape, 3)
+        axis = geometry["axis"].expand(*shape, 3)
+        closure = calf_pos + quat_apply(calf_quat.reshape(-1, 4), offset.reshape(-1, 3)).reshape(*shape, 3)
+        axis_w = quat_apply(calf_quat.reshape(-1, 4), axis.reshape(-1, 3)).reshape(*shape, 3)
+        return actuation_terms.closure_residual_mm(closure, wheel, axis_w)
 
     def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None) -> None:
         if env_ids is None:
@@ -132,6 +196,7 @@ class LocomotionEpisodeMetrics:
         for value in self._reward_weighted.values():
             value[env_ids] = 0.0
         self._last_action[env_ids] = 0.0
+        self._torque_window.reset(env_ids)
         self._buffers["continuous_route_corridor_valid"][env_ids] = 1.0
         terrain = self.env.scene.terrain
         terrain_types = getattr(terrain, "terrain_types", None)
@@ -157,6 +222,7 @@ class LocomotionEpisodeMetrics:
         command_term = self.env.command_manager.get_term(LOCOMOTION_COMMAND_NAME)
         command = command_term.command
         self._buffers["steps"] += 1.0
+        self._step_counter += 1
 
         if self.metric_groups["core"] or self.metric_groups["runtime"]:
             root_lin_vel_b = robot.data.root_lin_vel_b
@@ -168,6 +234,13 @@ class LocomotionEpisodeMetrics:
                 finite &= torch.isfinite(root_lin_vel_b).all(dim=1)
                 finite &= torch.isfinite(root_ang_vel_b).all(dim=1)
                 self._buffers["finite_steps"] += finite.float()
+                if self._step_counter % self.closure_sample_period == 0:
+                    residual = self._closure_residual_mm(robot)
+                    if residual is not None:
+                        residual = torch.nan_to_num(residual, nan=1.0e6, posinf=1.0e6)
+                        self._buffers["closure_residual_max_mm"] = torch.maximum(
+                            self._buffers["closure_residual_max_mm"], residual
+                        )
             if self.metric_groups["core"]:
                 command = _finite_or_zero(command)
                 root_lin_vel_b = _finite_or_zero(root_lin_vel_b)
@@ -217,6 +290,25 @@ class LocomotionEpisodeMetrics:
             power = torch.abs(joint_torque * joint_vel)
             self._buffers["leg_mechanical_energy"] += torch.sum(power[:, :leg_count], dim=1) * self.dt
             self._buffers["wheel_mechanical_energy"] += torch.sum(power[:, leg_count:], dim=1) * self.dt
+            leg_torque = joint_torque[:, :leg_count]
+            leg_target = _finite_or_zero(robot.data.joint_pos_target[:, self.leg_joint_ids])
+            self._buffers["leg_saturation_count"] += actuation_terms.saturation_fraction(
+                action[:, LEG_ACTION_SLICE], self.action_saturation_threshold
+            )
+            self._buffers["wheel_saturation_count"] += actuation_terms.saturation_fraction(
+                action[:, WHEEL_ACTION_SLICE], self.action_saturation_threshold
+            )
+            self._buffers["leg_torque_saturation_count"] += actuation_terms.torque_saturation_fraction(
+                leg_torque, self._leg_effort_limit
+            )
+            self._buffers["leg_torque_over_rated_count"] += actuation_terms.over_rated_fraction(leg_torque)
+            self._buffers["leg_tracking_error_sq"] += actuation_terms.tracking_error_sq(
+                leg_target, joint_pos[:, :leg_count]
+            )
+            window_mean = self._torque_window.push(leg_torque.abs())
+            self._buffers["leg_torque_1s_mean_max"] = torch.maximum(
+                self._buffers["leg_torque_1s_mean_max"], window_mean.amax(dim=1)
+            )
             self._last_action.copy_(action)
 
         if self.metric_groups["support"]:
@@ -309,12 +401,20 @@ class LocomotionEpisodeMetrics:
                 "actuation/joint_velocity_limit_rate": self._buffers["joint_velocity_limit_count"][env_ids] / steps,
                 "actuation/leg_mechanical_energy_j": self._buffers["leg_mechanical_energy"][env_ids],
                 "actuation/wheel_mechanical_energy_j": self._buffers["wheel_mechanical_energy"][env_ids],
+                "actuation/leg_saturation_rate": self._buffers["leg_saturation_count"][env_ids] / steps,
+                "actuation/wheel_saturation_rate": self._buffers["wheel_saturation_count"][env_ids] / steps,
+                "actuation/leg_torque_saturation_rate": self._buffers["leg_torque_saturation_count"][env_ids] / steps,
+                "actuation/leg_torque_over_rated_rate": self._buffers["leg_torque_over_rated_count"][env_ids] / steps,
+                "actuation/leg_tracking_error_rad": torch.sqrt(self._buffers["leg_tracking_error_sq"][env_ids] / steps),
+                "actuation/leg_torque_1s_mean_max_nm": self._buffers["leg_torque_1s_mean_max"][env_ids],
             })
         if self.metric_groups["runtime"]:
             metrics.update({
                 "runtime/finite_rate": self._buffers["finite_steps"][env_ids] / steps,
                 "runtime/all_finite": (self._buffers["finite_steps"][env_ids] == steps).float(),
             })
+            if self._closure is not None:
+                metrics["runtime/closure_residual_max_mm"] = self._buffers["closure_residual_max_mm"][env_ids]
         if self.metric_groups["terrain"]:
             route_role = torch.zeros_like(steps)
             continuous_id = TRAINING_TERRAIN_FAMILIES.index(COMPOSITION_FAMILY)
@@ -377,6 +477,13 @@ def aggregate_metric_batch(
     result = {
         f"{prefix}/{name}": values.float().mean() for name, values in metrics.items()
     }
+    if "runtime/closure_residual_max_mm" in metrics:
+        # A loop-closure defect matters wherever it happens, so log the batch maximum.
+        result[f"{prefix}/runtime/closure_residual_max_mm"] = metrics["runtime/closure_residual_max_mm"].float().max()
+    if "actuation/leg_torque_1s_mean_max_nm" in metrics:
+        result[f"{prefix}/actuation/leg_torque_1s_mean_max_nm"] = metrics[
+            "actuation/leg_torque_1s_mean_max_nm"
+        ].float().max()
     if "safety/base_tilt_max_rad" in metrics:
         tilt = metrics["safety/base_tilt_max_rad"].float()
         result[f"{prefix}/safety/base_tilt_max_p50_rad"] = torch.quantile(tilt, 0.50)
@@ -398,6 +505,8 @@ def terrain_family_metrics(
         "safety/unsafe_termination",
         "safety/timeout",
         "actuation/action_saturation_rate",
+        "actuation/leg_saturation_rate",
+        "actuation/leg_torque_saturation_rate",
         "actuation/leg_mechanical_energy_j",
         "actuation/wheel_mechanical_energy_j",
         "runtime/all_finite",
