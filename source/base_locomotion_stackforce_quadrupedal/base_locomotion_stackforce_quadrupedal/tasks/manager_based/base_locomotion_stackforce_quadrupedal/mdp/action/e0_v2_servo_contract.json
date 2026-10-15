@@ -40253,7 +40253,7 @@
   },
   "exploration": {
     "physical_noise_rad": 0.1,
-    "wheel_init_std": 0.3
+    "wheel_init_std": 0.1
   },
   "obstacles": {
     "min_measured_lift_m": 0.07352852821350098,

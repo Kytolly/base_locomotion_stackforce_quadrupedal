@@ -399,6 +399,8 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
     # "servo_model" = what the robot can compute (hip servo-model estimate, commanded
     # wheel velocity), with true hip state moved to the critic.  servo_range_v2 only.
     policy_joint_observation: str = "measured"
+    # Diagnostic only: hold the leg targets at the stance whatever the policy outputs.
+    leg_action_lock_to_stance: bool = False
     servo_model_delay_steps: int = 0
     foot_track_pose: bool = True  # T4
     foot_contact_update_period: float | None = None  # T6 (None = physics dt)
@@ -438,13 +440,19 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
         if mode == "servo_model":
             policy.joint_pos.func, policy.joint_pos.params = proprioception_terms.servo_model_joint_position, {}
             policy.joint_vel.func, policy.joint_vel.params = proprioception_terms.servo_model_joint_velocity, {}
-            legs = SceneEntityCfg("robot", joint_names=list(LEG_JOINTS), preserve_order=True)
-            critic.true_leg_joint_pos = ObsTerm(func=privileged_terms.true_joint_position, params={"asset_cfg": legs})
-            critic.true_leg_joint_vel = ObsTerm(func=privileged_terms.true_joint_velocity, params={"asset_cfg": legs})
+            def legs():
+                return {"asset_cfg": SceneEntityCfg("robot", joint_names=list(LEG_JOINTS), preserve_order=True)}
+
+            critic.true_leg_joint_pos = ObsTerm(func=privileged_terms.true_joint_position, params=legs())
+            critic.true_leg_joint_vel = ObsTerm(func=privileged_terms.true_joint_velocity, params=legs())
         else:
-            active = {"asset_cfg": SceneEntityCfg("robot", joint_names=list(ACTIVE_JOINTS))}
-            policy.joint_pos.func, policy.joint_pos.params = proprioception.active_joint_position, dict(active)
-            policy.joint_vel.func, policy.joint_vel.params = proprioception.active_joint_velocity, dict(active)
+            # One SceneEntityCfg per term: a shared one is resolved twice and fails the
+            # joint_names/joint_ids consistency check for the unordered ACTIVE_JOINTS.
+            def active():
+                return {"asset_cfg": SceneEntityCfg("robot", joint_names=list(ACTIVE_JOINTS))}
+
+            policy.joint_pos.func, policy.joint_pos.params = proprioception.active_joint_position, active()
+            policy.joint_vel.func, policy.joint_vel.params = proprioception.active_joint_velocity, active()
             critic.true_leg_joint_pos = None
             critic.true_leg_joint_vel = None
 
@@ -469,6 +477,7 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
                 None if self.leg_target_max_step_rad is None else float(self.leg_target_max_step_rad)
             )
             self.actions.leg_position.servo_model_delay_steps = int(self.servo_model_delay_steps)
+            self.actions.leg_position.lock_to_stance = bool(self.leg_action_lock_to_stance)
             self.events.servo_joint_limits = EventTerm(
                 func=events.write_servo_joint_limits,
                 mode="startup",
@@ -545,6 +554,7 @@ ENV_OPTION_FIELDS = {
     "leg_target_max_step_rad": "leg_target_max_step_rad",
     "policy_joint_observation": "policy_joint_observation",
     "servo_model_delay_steps": "servo_model_delay_steps",
+    "leg_action_lock_to_stance": "leg_action_lock_to_stance",
 }
 THROUGHPUT_OPTION_FIELDS = {
     "enabled_self_collisions": "enabled_self_collisions",

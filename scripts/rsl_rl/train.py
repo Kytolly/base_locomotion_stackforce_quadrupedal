@@ -249,6 +249,9 @@ def main() -> None:
         apply_config(env_cfg.curriculum, config.curriculum, "curriculum")
         if terrain_generator := getattr(env_cfg.scene.terrain, "terrain_generator", None):
             terrain_generator.curriculum = env_cfg.curriculum.terrain_levels is not None
+    if config.get("rewards"):
+        # Optional reward-term overrides (e.g. rewards.action_rate.weight=-0.05) for ablations.
+        apply_config(env_cfg.rewards, config.rewards, "rewards")
     physics_values = config.env.get("physics", {})
     if physics_values:
         physics_cfg = getattr(env_cfg.sim, "physics", None)

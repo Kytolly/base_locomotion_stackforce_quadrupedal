@@ -95,6 +95,9 @@ def test_env_options_switch_actor_channels_and_critic_truth():
     cfg = _env_cfg()
     assert cfg.observations.policy.joint_pos.func is proprioception.active_joint_position
     assert cfg.observations.privileged.true_leg_joint_pos is None
+    # Each term resolves its own SceneEntityCfg; sharing one fails at env construction.
+    policy = cfg.observations.policy
+    assert policy.joint_pos.params["asset_cfg"] is not policy.joint_vel.params["asset_cfg"]
     apply_e0_env_options(cfg, {"action_contract": "servo_range_v2", "policy_joint_observation": "servo_model",
                                "servo_model_delay_steps": 2})
     assert cfg.observations.policy.joint_pos.func is proprioception.servo_model_joint_position
@@ -104,3 +107,6 @@ def test_env_options_switch_actor_channels_and_critic_truth():
     apply_e0_env_options(cfg, {"action_contract": "servo_range_v2", "policy_joint_observation": "measured"})
     assert cfg.observations.policy.joint_pos.func is proprioception.active_joint_position
     assert cfg.observations.privileged.true_leg_joint_pos is None
+    # Each term resolves its own SceneEntityCfg; sharing one fails at env construction.
+    policy = cfg.observations.policy
+    assert policy.joint_pos.params["asset_cfg"] is not policy.joint_vel.params["asset_cfg"]

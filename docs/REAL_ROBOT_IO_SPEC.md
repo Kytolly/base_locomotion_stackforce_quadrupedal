@@ -26,6 +26,14 @@
 
 仿真对应代码：`mdp/observation/proprioception/terms.py` 的 `servo_model_joint_position` / `servo_model_joint_velocity`，以及 `mdp/observation/history/terms.py`。仿真对角速度和重力项分别加了 ±0.02、±0.01 的均匀噪声，对关节项分别加了 ±0.002、±0.02 的噪声。被动膝关节不进入 actor 观测。
 
+### 观测归一化（必须）
+
+正式配置启用了观测归一化（`obs_normalization: true`）：网络的输入不是上表的原始值，而是 `(x − mean) / (std + eps)`，其中 `mean`、`std` 是训练时累计的 46 维运行统计量。这些统计量随 checkpoint 一起保存，位置是 `actor_state_dict` 中的 `obs_normalizer.*`（rsl_rl `EmpiricalNormalization`）。
+
+- 用 rsl_rl 导出 JIT/ONNX 时，归一化已经打包在导出模型里（`rsl_rl/models/mlp_model.py` 的导出类）。固件直接运行导出模型即可，传入的就是上表的原始 46 维值。
+- 如果在固件中手写 MLP 推理，必须同时导出这 46 个 `mean` 和 `std`（以及 `eps`），并在推理前先做归一化。漏掉这一步时，策略收到的输入尺度就和训练时完全不同。
+- 归一化统计量属于 checkpoint：每个 checkpoint 都要导出它自己的统计量，不能混用。
+
 ## 3. 髋舵机位置估计（实机与仿真必须相同）
 
 DS041MG 是开环 PWM 舵机，没有位置反馈，所以 actor 看到的是下面这个模型，而不是测量值。仿真代码：`mdp/action/servo_range.py` 的 `servo_model_step`，以及 `mdp/action/asymmetric.py`。

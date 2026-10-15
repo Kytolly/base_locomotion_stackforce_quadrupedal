@@ -14,13 +14,27 @@ from datetime import datetime
 from pathlib import Path
 
 def get_log_file():
+    for i, arg in enumerate(sys.argv):
+        if arg == "--log" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.endswith(".log") and os.path.isfile(arg):
+            return arg
+
+    # If active training logs exist in output/ or logs/, prefer the most recently modified one
+    recent_logs = sorted(
+        list(Path("output").glob("**/*.log")) + 
+        list(Path("logs").glob("**/*.log")) + 
+        list(Path("wandb").glob("*/files/output.log")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    )
+    for candidate in recent_logs:
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return str(candidate)
+
     target = Path("wandb/latest-run/files/output.log")
     if target.is_file():
         return str(target)
-    # Search all wandb output.log files sorted by modification time
-    candidates = sorted(Path("wandb").glob("*/files/output.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if candidates:
-        return str(candidates[0])
     return "wandb/latest-run/files/output.log"
 
 LOG_FILE = get_log_file()

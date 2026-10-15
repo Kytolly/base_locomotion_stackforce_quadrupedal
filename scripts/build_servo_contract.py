@@ -56,6 +56,7 @@ LEGACY_MINIMUM_M = 0.06
 HEIGHT_COMMAND_HALF_RANGE_M = 0.03
 HEIGHT_REACH_MARGIN_M = 0.010
 INIT_DROP_M = 0.005  # E0-v1 spawned 5 mm above its nominal height as well
+WHEEL_INIT_STD = 0.1  # latent; x 20 rad/s action scale = 2 rad/s wheel-speed noise
 PHYSICAL_NOISE_RAD = 0.10  # upper bound on either side of the stance; one-step servo travel is 0.175 rad
 STEP_START_M = 0.02
 STEP_CAP_FRACTION = 0.8
@@ -179,7 +180,7 @@ def build(final_ranges: dict | None, stance: dict | None, lift: dict | None) -> 
             "minimum_m": round(LEGACY_MINIMUM_M * scale, 3),
             "source": height_source,
         },
-        "exploration": {"physical_noise_rad": PHYSICAL_NOISE_RAD, "wheel_init_std": 0.3},
+        "exploration": {"physical_noise_rad": PHYSICAL_NOISE_RAD, "wheel_init_std": WHEEL_INIT_STD},
         "obstacles": {
             "min_measured_lift_m": min_lift,
             "cap_fraction_of_lift": STEP_CAP_FRACTION,

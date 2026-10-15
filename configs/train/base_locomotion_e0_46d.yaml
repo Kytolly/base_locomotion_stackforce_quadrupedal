@@ -51,6 +51,19 @@ env:
   physics:
     gpu_found_lost_aggregate_pairs_capacity: 67108864
 
+# Reward-term overrides on top of env/complex_env_cfg.py RewardsCfg (scripts/rsl_rl/train.py
+# applies them strictly).  Group B/E of docs/REWARD_CURRICULUM_FIX_PLAN.md: stronger action
+# smoothing and joint-speed penalties, and a forward-tracking kernel that pays little for
+# standing still (sigma 0.15 m/s instead of 0.25).
+rewards:
+  action_rate:
+    weight: -0.05
+  joint_velocity_limit:
+    weight: -0.2
+  track_forward_velocity:
+    params:
+      std: 0.15
+
 curriculum:
   terrain_levels:
     params:
@@ -82,22 +95,27 @@ agent:
   actor:
     hidden_dims: [128, 128]
     activation: elu
-    obs_normalization: false
+    # Running mean/std normalization: without it the 0.1-0.45 command channels are
+    # swamped by +-20 rad/s wheel and +-8.7 rad/s joint-velocity channels and the policy
+    # ignores the command (docs/REWARD_CURRICULUM_FIX_PLAN.md, group G).  The statistics
+    # are saved with the actor and folded into JIT/ONNX exports.
+    obs_normalization: true
     distribution_cfg:
       class_name: base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution
       # Per dimension: 8 legs (outer FR FL RL RR, inner FR FL RL RR), then 4 wheels.
       # Leg values = 0.10 rad / larger half-range of each joint, so the initial
       # physical joint noise is <= 0.10 rad on both sides of the stance (one-step
-      # servo travel is 0.175 rad); wheels keep 0.3. min_std 0.02 admits these.
+      # servo travel is 0.175 rad); wheels 0.1 (2 rad/s, about 0.066 m/s of wheel speed;
+      # 0.3 gave 0.2 m/s and random yaw). min_std 0.02 admits these.
       # Regenerate with servo_range.leg_init_std() whenever the contract changes.
-      init_std: [0.043, 0.033, 0.0424, 0.0351, 0.0661, 0.0391, 0.0661, 0.0429, 0.3, 0.3, 0.3, 0.3]
+      init_std: [0.043, 0.033, 0.0424, 0.0351, 0.0661, 0.0391, 0.0661, 0.0429, 0.1, 0.1, 0.1, 0.1]
       std_type: log
       min_std: 0.02
       max_std: 0.5
   critic:
     hidden_dims: [128, 128]
     activation: elu
-    obs_normalization: false
+    obs_normalization: true
   algorithm:
     num_learning_epochs: 5
     num_mini_batches: 4

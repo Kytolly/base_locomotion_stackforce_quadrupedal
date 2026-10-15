@@ -40,6 +40,10 @@ parser.add_argument("--checkpoint", type=Path, required=True)
 parser.add_argument("--num-envs", type=int, default=1024)
 parser.add_argument("--steps", type=int, default=None, help="default: one episode length")
 parser.add_argument("--output", type=Path, required=True)
+parser.add_argument("--modes", nargs="+", default=["deterministic", "noisy"],
+                    choices=["deterministic", "noisy", "hold_legs", "zero"],
+                    help="hold_legs: deterministic wheels, leg actions 0 (= stance targets, so the "
+                         "previous-action and servo-model observations stay consistent); zero: all actions 0")
 parser.add_argument("overrides", nargs="*", help="OmegaConf dotlist overrides for the training YAML.")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -53,6 +57,9 @@ from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
 import base_locomotion_stackforce_quadrupedal.tasks  # noqa: E402,F401
 from base_locomotion_stackforce_quadrupedal.training import apply_config, load_config  # noqa: E402
+from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.mdp.support import (  # noqa: E402,E501
+    wheel_contact_state,
+)
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.complex_env_cfg import (  # noqa: E402,E501
     apply_e0_env_options,
 )
@@ -64,6 +71,7 @@ from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_
 )
 from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.evaluation.metric.locomotion import (  # noqa: E402,E501
     aggregate_metric_batch,
+    motion_family_metrics,
 )
 
 SERVO_STEP_RAD = 8.73 * 0.02
@@ -78,6 +86,16 @@ METRICS = (
     "train/runtime/closure_residual_max_mm",
     "train/safety/unsafe_termination",
     "train/safety/base_collision_rate",
+    "train/locomotion/forward_velocity_rmse_mps",
+    "train/locomotion/yaw_rate_rmse_radps",
+    "train/motion/stop_stand/locomotion/forward_velocity_rmse_mps",
+    "train/motion/stop_stand/locomotion/yaw_rate_rmse_radps",
+    "train/motion/forward/locomotion/forward_velocity_rmse_mps",
+    "train/motion/yaw_only/locomotion/yaw_rate_rmse_radps",
+    "train/locomotion/body_height_rmse_m",
+    "train/safety/base_tilt_rms_rad",
+    "train/support/wheel_contact_fraction",
+    "train/support/invalid_rate",
 )
 
 
@@ -103,7 +121,8 @@ def build_env(config):
     return TrainingMetricsWrapper(gym.make(str(config.task), cfg=env_cfg), config.get("logging", {}))
 
 
-def rollout(env, vec, policy, stochastic: bool, steps: int) -> dict:
+def rollout(env, vec, policy, stochastic: bool, steps: int, leg_dims: int = 0) -> dict:
+    """``leg_dims`` > 0 zeroes that many leading action dims (raw 0 maps to the stance)."""
     base = env.unwrapped
     term = base.action_manager.get_term("leg_position")
     metrics = env.metrics
@@ -111,23 +130,30 @@ def rollout(env, vec, policy, stochastic: bool, steps: int) -> dict:
     metrics.reset()
     obs = vec.get_observations()
     sums = {key: 0.0 for key in METRICS}
-    weight = 0.0
+    weights = {key: 0.0 for key in METRICS}
     lengths = []
     deltas = []
     previous = None
+    contact_sum = torch.zeros(4, device=base.device)
+    contact_steps = 0
 
     def absorb(batch: dict, count: int) -> None:
-        nonlocal weight
+        # Per-family keys come from fewer episodes than ``count``; the weighting is approximate.
         for key in METRICS:
             if key in batch:
                 sums[key] += float(batch[key]) * count
-        weight += count
+                weights[key] += count
 
     for _ in range(steps):
         with torch.inference_mode():
             actions = policy(obs, stochastic_output=stochastic)
+            if leg_dims:
+                actions = actions.clone()
+                actions[:, :leg_dims] = 0.0
         length_before = base.episode_length_buf.clone()
         obs, _, dones, extras = vec.step(actions)
+        contact_sum += wheel_contact_state(base).float().mean(0)
+        contact_steps += 1
         target = term.processed_actions.clone()
         if previous is not None:
             alive = length_before > 0
@@ -143,17 +169,20 @@ def rollout(env, vec, policy, stochastic: bool, steps: int) -> dict:
         zeros = torch.zeros(base.num_envs, dtype=torch.bool, device=base.device)
         truncated = zeros.clone()
         truncated[running] = True
-        batch = aggregate_metric_batch(metrics.episode_metrics(running, zeros, truncated, zeros), "train")
+        episode = metrics.episode_metrics(running, zeros, truncated, zeros)
+        batch = aggregate_metric_batch(episode, "train")
+        batch.update(motion_family_metrics(episode, "train"))
         absorb({k: (v.item() if hasattr(v, "item") else v) for k, v in batch.items()}, len(running))
     delta = torch.cat(deltas)
     completed = torch.cat(lengths) if lengths else torch.zeros(0)
     quantiles = torch.quantile(delta[torch.randperm(len(delta), device=delta.device)[:2_000_000]],
                                torch.tensor([0.5, 0.9, 0.99], device=delta.device))
     return {
-        "metrics": {key: (sums[key] / weight if weight else None) for key in METRICS},
+        "metrics": {key: (sums[key] / weights[key] if weights[key] else None) for key in METRICS},
         "episodes_completed": int(len(completed)),
         "mean_completed_episode_length": float(completed.mean()) if len(completed) else None,
         "survived_to_horizon": int(len(running)),
+        "wheel_contact_fraction_fr_fl_rl_rr": (contact_sum / max(contact_steps, 1)).tolist(),
         "target_step_change_rad": {
             "mean": float(delta.mean()),
             "p50": float(quantiles[0]),
@@ -187,8 +216,16 @@ def main() -> None:
         steps = args.steps or int(round(env.unwrapped.max_episode_length))
         report = {"checkpoint": str(args.checkpoint), "overrides": args.overrides, "num_envs": args.num_envs,
                   "steps": steps, "asset_root": os.environ.get("SF_QUAD_ASSET_ROOT")}
-        for label, stochastic in (("deterministic", False), ("noisy", True)):
-            report[label] = rollout(env, vec, actor, stochastic, steps)
+        leg_dims = env.unwrapped.action_manager.get_term("leg_position").action_dim
+
+        def zero_policy(obs, stochastic_output=False):
+            return torch.zeros((args.num_envs, env.unwrapped.action_manager.total_action_dim), device=args.device)
+
+        plans = {"deterministic": (actor, False, 0), "noisy": (actor, True, 0),
+                 "hold_legs": (actor, False, leg_dims), "zero": (zero_policy, False, 0)}
+        for label in args.modes:
+            policy, stochastic, held = plans[label]
+            report[label] = rollout(env, vec, policy, stochastic, steps, held)
             print(f"[EVAL] {label}: {json.dumps(report[label])}", flush=True)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

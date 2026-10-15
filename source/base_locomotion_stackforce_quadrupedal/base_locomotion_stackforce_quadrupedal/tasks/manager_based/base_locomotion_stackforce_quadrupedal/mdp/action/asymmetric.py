@@ -92,6 +92,9 @@ class AsymmetricJointPositionAction(JointPositionAction):
         return self._offset
 
     def process_actions(self, actions: torch.Tensor) -> None:
+        if self.cfg.lock_to_stance:
+            # Diagnostic: raw 0 maps to the stance, and the observations see the 0 actually commanded.
+            actions = torch.zeros_like(actions)
         self._raw_actions[:] = actions
         target = raw_to_joint_target(self._raw_actions, self._lower, self._offset, self._upper)
         target = torch.clamp(target, min=self._lower, max=self._upper)
@@ -135,6 +138,8 @@ class AsymmetricJointPositionActionCfg(JointPositionActionCfg):
     projection: dict[str, dict] = {}
     max_target_step_rad: float | None = None
     """Per-control-step target change limit (rad); None disables the slew limit."""
+    lock_to_stance: bool = False
+    """Diagnostic only: ignore the policy's leg actions and hold the stance targets."""
     servo_model_speed_rad_s: float = 8.73
     """Speed of the deployable servo-position estimate (DS041MG no-load)."""
     servo_model_delay_steps: int = 0

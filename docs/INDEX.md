@@ -56,7 +56,7 @@ benchmark/washboard_track/  washboard 固定赛道参数与 USD/PhysX 生成
 12. [E0 全实验与长训命令](E0_EXPERIMENT_COMMANDS.md)
 13. [动作范围修复与训练吞吐优化计划](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)（2026-10-14，v3.7：G0–G7 已验收，长训预检通过）
 
-历史证据与专项诊断：[控制修正与重启](CONTROL_RESTART.md)、[并行规模实测](TRAINING_SCALE_REPORT.md)、[台阶探针](STAIR_PROBE.md)、[2026-10-02 台阶结果](STAIR_PROBE_RESULTS_2026-10-02.md)、[FL/RR 外髋静态内力诊断](OUTER_HIP_STATIC_FORCE_DIAGNOSIS.md)、[实机观测与执行规格](REAL_ROBOT_IO_SPEC.md)（轮碰撞体凸包不一致导致对角载荷，2026-10-14）。日期报告仅适用于其记录的 checkpoint 和测试条件，不代表当前 E0 run。
+历史证据与专项诊断：[控制修正与重启](CONTROL_RESTART.md)、[并行规模实测](TRAINING_SCALE_REPORT.md)、[台阶探针](STAIR_PROBE.md)、[2026-10-02 台阶结果](STAIR_PROBE_RESULTS_2026-10-02.md)、[FL/RR 外髋静态内力诊断](OUTER_HIP_STATIC_FORCE_DIAGNOSIS.md)、[实机观测与执行规格](REAL_ROBOT_IO_SPEC.md)、[奖励与课程修复方案（草案）](REWARD_CURRICULUM_FIX_PLAN.md)（轮碰撞体凸包不一致导致对角载荷，2026-10-14）。日期报告仅适用于其记录的 checkpoint 和测试条件，不代表当前 E0 run。
 
 ## 实施顺序
 
