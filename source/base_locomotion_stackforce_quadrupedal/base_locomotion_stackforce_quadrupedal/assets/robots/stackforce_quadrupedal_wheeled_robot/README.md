@@ -49,6 +49,12 @@ objects under `closure_joints`, with collisions disabled and
 `physics:excludeFromArticulation = true`. This preserves the tree articulation
 while adding the physical closure constraints.
 
+After exporting, the script calls `scripts/wheel_colliders.py`: the four
+`*_foot` mesh colliders are disabled and every `*_Foot_Link` gets the same
+32-sided prism `wheel_collider` (64 vertices, flats 33 mm from the axle).
+Separately cooked mesh hulls had left the wheels resting 1.6 mm apart in
+height, which preloaded the stance diagonally.
+
 The generated USD is also a review artifact; it can be opened directly in
 Isaac Sim for visual inspection of all four inner chains and closure frames.
 

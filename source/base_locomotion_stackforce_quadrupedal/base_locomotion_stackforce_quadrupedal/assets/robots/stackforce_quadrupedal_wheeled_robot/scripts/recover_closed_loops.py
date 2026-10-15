@@ -21,6 +21,8 @@ APP = SimulationApp({"headless": True, "fast_shutdown": False})
 
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics  # noqa: E402
 
+from wheel_colliders import replace_wheel_colliders  # noqa: E402
+
 
 ASSET_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ASSET_ROOT / "config/closure_frames.json"
@@ -116,6 +118,10 @@ def add_closures(input_path: Path, output_path: Path) -> None:
     # Flatten resolves composition arcs before moving the asset to another directory.
     stage.Flatten().Export(str(output_path))
     reopened = Usd.Stage.Open(str(output_path))
+    # The wheel prims are instance proxies before flattening; edit their flattened sources.
+    for name, wheel in replace_wheel_colliders(reopened).items():
+        print(f"{name}: {wheel['sides']}-sided wheel collider, radius {wheel['radius_m'] * 1000:.3f} mm")
+    reopened.GetRootLayer().Save()
     for entry in config["legs"].values():
         find_unique(reopened, entry["inner_lower_link"])
         find_unique(reopened, entry["w2_frame"])

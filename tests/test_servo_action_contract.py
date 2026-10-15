@@ -126,15 +126,16 @@ def test_body_heights_follow_the_new_stance():
     assert heights["minimum_m"] == pytest.approx(0.06 * scale, abs=0.001)
 
 
-def test_yaml_leg_std_keeps_the_old_physical_noise():
+def test_yaml_leg_std_bounds_the_physical_noise():
     config = OmegaConf.load(ROOT / "configs/train/base_locomotion_e0_46d.yaml")
     init_std = list(config.agent.actor.distribution_cfg.init_std)
     assert init_std[:8] == servo.leg_init_std(LEG_JOINTS)
     assert init_std[8:] == [CONTRACT["exploration"]["wheel_init_std"]] * 4
     lower, default, upper = servo.leg_joint_ranges(LEG_JOINTS)
     for std, lo, d, hi in zip(init_std[:8], lower, default, upper):
-        assert std * min(d - lo, hi - d) == pytest.approx(0.15, abs=0.001)
-        assert 0.05 <= std <= 0.5
+        # Neither side of the piecewise map may exceed 0.10 rad (servo: 0.175 rad per step).
+        assert std * max(d - lo, hi - d) == pytest.approx(0.10, abs=0.001)
+        assert config.agent.actor.distribution_cfg.min_std <= std <= 0.5
 
 
 def test_obstacles_start_at_two_centimetres():

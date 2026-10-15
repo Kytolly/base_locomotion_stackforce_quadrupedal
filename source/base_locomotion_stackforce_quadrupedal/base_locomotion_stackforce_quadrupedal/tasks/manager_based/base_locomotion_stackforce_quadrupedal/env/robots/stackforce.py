@@ -61,6 +61,10 @@ def _actuator(joints: tuple[str, ...], effort: float, velocity: float, stiffness
 
 
 LEGACY_INIT_JOINT_POS = {".*": 0.0}
+# T3: 8 iterations leave the four excluded closure joints converged only at position
+# level (ghost joint velocities, ~2.6x static hip load); 32 matches five-bar statics.
+# docs/OUTER_HIP_STATIC_FORCE_DIAGNOSIS.md; costs +36 % sample time per iteration.
+SOLVER_POSITION_ITERATIONS = 32
 LEGACY_INIT_ROOT_HEIGHT_M = 0.11
 
 
@@ -70,14 +74,15 @@ def create_robot_articulation_cfg(
     init_joint_pos: dict[str, float] | None = None,
     init_root_height_m: float = LEGACY_INIT_ROOT_HEIGHT_M,
     enabled_self_collisions: bool = True,
-    solver_position_iteration_count: int = 8,
+    solver_position_iteration_count: int = SOLVER_POSITION_ITERATIONS,
 ) -> ArticulationCfg:
     """Create the 12-active-joint closed-loop articulation configuration.
 
     ``init_joint_pos`` is the default stance (the E0-v1 stance is all zeros);
     E0-v2 passes the servo-contract hips and closure-consistent passive knees.
     ``enabled_self_collisions`` and ``solver_position_iteration_count`` are the
-    G5 throughput switches T2/T3; the defaults are the E0-v1 values.
+    G5 throughput switches T2/T3; self-collisions default to the E0-v1 value and the
+    solver iterations to ``SOLVER_POSITION_ITERATIONS``.
     """
     return ArticulationCfg(
         prim_path=prim_path,

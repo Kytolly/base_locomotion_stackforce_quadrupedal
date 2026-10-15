@@ -69,14 +69,17 @@ def leg_init_std(
     physical_noise_rad: float | None = None,
     contract: dict[str, Any] | None = None,
 ) -> list[float]:
-    """Latent std per leg dimension giving the old ~0.15 rad initial joint noise.
+    """Latent std per leg dimension bounding the initial joint noise to ``physical_noise_rad``.
 
-    Uses the smaller half-range of each joint (plan G4, ``training/distribution.py`` row).
+    The raw-to-target map has a different gain on each side of the stance, so the
+    larger half-range is used: neither side exceeds the bound.  (Scaling by the
+    smaller half-range left 0.22-0.42 rad on the larger side, more than the
+    0.175 rad a DS041MG travels in one 20 ms control step.)
     """
     contract = contract or load_servo_contract()
     noise = float(physical_noise_rad or contract["exploration"]["physical_noise_rad"])
     lower, default, upper = leg_joint_ranges(joint_names, contract)
-    return [round(noise / min(d - lo, hi - d), 4) for lo, d, hi in zip(lower, default, upper)]
+    return [round(noise / max(d - lo, hi - d), 4) for lo, d, hi in zip(lower, default, upper)]
 
 
 def raw_to_joint_target(raw, lower, default, upper):
@@ -88,6 +91,27 @@ def raw_to_joint_target(raw, lower, default, upper):
     positive = raw.clamp(min=0.0) if hasattr(raw, "clamp") else max(raw, 0.0)
     negative = raw.clamp(max=0.0) if hasattr(raw, "clamp") else min(raw, 0.0)
     return default + positive * (upper - default) + negative * (default - lower)
+
+
+SERVO_MODEL_SPEED_RAD_S = 8.73  # DS041MG no-load speed (0.12 s / 60 deg)
+
+
+def servo_model_step(estimate, target, max_step_rad):
+    """One control step of the deployable servo-position estimate.
+
+    The DS041MG has no position feedback, so the policy observes this model on
+    the robot and in simulation alike: the estimate moves toward the (possibly
+    delayed) commanded target by at most ``max_step_rad`` (speed x control
+    period).  Velocity is the step difference divided by the control period.
+    docs/REAL_ROBOT_IO_SPEC.md gives the firmware form.
+    """
+    return estimate + (target - estimate).clamp(min=-max_step_rad, max=max_step_rad)
+
+
+def joint_target_to_raw(target, lower, default, upper):
+    """Inverse of ``raw_to_joint_target`` for targets inside ``[lower, upper]``."""
+    offset = target - default
+    return (offset.clamp(min=0.0) / (upper - default)) + (offset.clamp(max=0.0) / (default - lower))
 
 
 def project_leg_target_grid(target, spec):
@@ -122,6 +146,9 @@ __all__ = [
     "LEGACY_NOMINAL_BODY_HEIGHT_M",
     "LEGACY_STEP_HEIGHT_RANGE_M",
     "SERVO_ACTION_CONTRACT",
+    "SERVO_MODEL_SPEED_RAD_S",
+    "joint_target_to_raw",
+    "servo_model_step",
     "leg_init_std",
     "leg_joint_ranges",
     "load_servo_contract",

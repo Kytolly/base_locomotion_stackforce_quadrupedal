@@ -11,6 +11,7 @@
 > - v3.5（2026-10-13）：被动外膝占位限位由 ±1.57 rad 放宽到 ±π；G3 以 0.05 rad 网格建立逐腿连通可行域，并在动作端投影不可行组合。
 > - v3.6（2026-10-14）：按本轮“快速定位动作范围问题”的范围，将 G6 明确拆成动作合同资格和策略质量观察；约 1k iteration 的 P0/P1 不再承担策略收敛验收，性能风险转入 G8/G9。
 > - v3.7（2026-10-14）：G7 改为长训前机械净空资格；手写控制器的整套越阶结果保留为观察，不再用控制脚本质量代替机构能力判断。
+> - v3.8（2026-10-14）：T3 反向调整，位置迭代 8 → 32（用户确认）。8 次时闭环只在位置层收敛，PhysX 报告的关节速度含幽灵分量，伺服额外承担约 2.6 倍静力学负载；32 次与五连杆静力学一致。代价：4096 env 每 PPO iteration 采样 2.92 → 3.97 s（+36%；16 次为 3.30 s，+13%）。另：轮碰撞体统一为 32 边棱柱（已安装）；腿探索噪声改为站姿两侧物理 std ≤ 0.10 rad（原按较小半区间折算，较大一侧达 0.22–0.42 rad）；腿目标限速 `env.leg_target_max_step_rad` 已实现但正式配置保持关闭（用户决定：仅当回放仍显示无效高频指令、且不损害支撑/落脚/扰动恢复时再启用，并同步到真机）。见 [外髋静态内力诊断](OUTER_HIP_STATIC_FORCE_DIAGNOSIS.md)。
 > **状态（2026-10-14）：** G0–G7 已记录 PASS；正式合同为 `g3_measured`。P1 动作饱和已降至验收线内且全程有限，短策略性能未验收；G7 已测得四腿自由基座支持下 72 mm 以上净空，但整套手写越阶仍失败并作为长训风险保留。正式长训尚未开始。
 > **证据边界：** 文中数值来自下列 run、配置和资料；任何修改之后都必须按门控重新测量，不能沿用旧结论。
 
@@ -319,7 +320,7 @@ G1 ─> G5 吞吐优化（与 G3/G4 并行）───────────�
 | --- | --- | --- | --- |
 | T1 | **课程等级跨阶段继承。** 在 `scripts/e0_training_orchestrator.py` 中读取上一阶段最后 100 iteration 的 `train/terrain/level` 中位数 $m$，续训时加 override `env.scene.terrain.max_init_terrain_level=round(m)`。更好的做法是把每个 env 的 `terrain_levels` 存进 checkpoint 的 extra 字段并恢复 | `e0_training_orchestrator.py`；`training/checkpoint.py` 或 `mdp/curricula/terrain.py` | 续训后前 100 iteration level ≥ m−1；`allow_terrain_stage_resume` 的合同检查仍然生效 |
 | T2 | **自碰撞精简。** `enabled_self_collisions` 设为 false，或只保留腿与机身、轮与机身的碰撞对 | `env/robots/stackforce.py` | 用 G3 扫描复核无腿间穿模；`base_collision` 率不变；站立高度误差不变 |
-| T3 | **求解器迭代：** `solver_position_iteration_count` 从 8 降到 4（不行则试 6） | 同上 | `closure_residual_max_mm` ≤ 1；机身高度 RMSE 变化 < 2 mm |
+| T3 | **求解器迭代：** `solver_position_iteration_count` 从 8 降到 4（不行则试 6）。**v3.8：两项均未通过；改为升到 32**（常量 `SOLVER_POSITION_ITERATIONS`，YAML 必须一致，有测试），采样时间 +36% | 同上 | `closure_residual_max_mm` ≤ 1；机身高度 RMSE 变化 < 2 mm；v3.8 加：静止站立外髋 `kp*err` 与静力学一致 |
 | T4 | **足端传感器：** 如果没有任何 reward 或 metric 读取 pose（全局搜索 `pose_w`、`quat_w`），把 `track_pose` 从 True 改为 False | `complex_env_cfg.py` | 指标键不缺失 |
 | T5 | **训练指标裁剪：** 训练时只开 core/safety/runtime/actuation/terrain；command/support/motion/reward 组以及 `wandb_panels` 关闭。完整指标只在 validation 中开启 | `configs/train/base_locomotion_e0_46d.yaml` 的 `logging` | 课程所需的键（level、tracking rmse、progress）仍然产生 |
 | T6 | **足端接触传感器 `update_period`** 从 dt 改为控制周期 0.02 s；`base_contact` 保持 dt | `complex_env_cfg.py` 的 `__post_init__` | 足端 air time 相关指标的数值合理（不出现 0 或异常跳变） |
@@ -450,6 +451,33 @@ G1 ─> G5 吞吐优化（与 G3/G4 并行）───────────�
 | 自碰撞关闭后出现穿模支撑 | G5-T2 复核失败 | 保留必要的碰撞对 |
 | 课程继承引入难度跳变 | 续训初期 unsafe 激增 | 改用 $m-1$ 作为初始最大 level |
 | 长训仍然停在新平台 | Expansion 结束时 level 无明显提升 | 暂停，回到 G6/G7 分析，不硬跑完 |
+| **腿目标限速的价值未经证实（开放决策）** | 见 §5.1 | 正式配置保持关闭；按 §5.1 的判据和评估方法决定 |
+
+### 5.1 开放决策：腿目标限速（`env.leg_target_max_step_rad`）
+
+**问题。** 限速把每个 20 ms 控制步的腿目标变化限制在 0.175 rad 以内，可以去掉舵机跟不上的无效高频指令，减轻力矩饱和、发热和齿轮冲击。代价是响应变慢，可能损害支撑、落脚和扰动恢复。目前**不知道前者是否值得后者**。
+
+**现状。** 代码与测试已实现（`mdp/action/asymmetric.py`；`tests/test_leg_slew_limit.py`），全局默认关闭，**正式配置也关闭**（`leg_target_max_step_rad: null`）。如果启用，策略观测中的“上一动作”会改为限速后的命令，实机必须在 `setAngle` 之前做同样的限幅；现有固件没有这一层。
+
+**已有证据，及其局限。**
+- 确定性评估（关闭探索噪声，`output/diagnostics/noise_eval/`）：P1 与 200 iteration 冒烟两个策略，分别约 26% 和 24% 的控制步目标变化超过 0.175 rad；带噪声时约 60%。局限：这两个策略是在旧的大噪声下训练的（较大一侧物理噪声 0.22–0.42 rad），在新噪声下重新训练后，策略本身可能就变平滑。
+- 40 iteration 检查（`output/diagnostics/sanity/compare.json`）：力矩饱和 0.65→0.29、速度超限 0.68→0.05、跟踪误差 0.54→0.16 rad。局限：这次同时改了降噪和限速，两者的作用**无法分开**；而且 40 iteration 不涉及落脚和扰动恢复能力。
+- 2026-10-15 补充检查（`output/diagnostics/obs_check/compare.json`）：设置为降噪、关闭限速、actor 改用舵机模型观测，取第 20–40 次 iteration。力矩饱和 0.69、速度超限 0.58、跟踪误差 0.60 rad、`action_rate_rms` 0.46，与旧噪声下的冒烟（0.65 / 0.68 / 0.54 / 0.45）相当。上一次检查（降噪 + 限速）则为 0.29 / 0.05 / 0.16 / 0.34。由此推测，训练早期的改善主要来自限速，而不是降噪：策略均值本身就在发出大幅跳变的目标。局限：这次同时改了观测，与上一次不是严格的单变量对照；40 iteration 也只反映训练早期，训练后的策略可能自己学得更平滑。
+- 0.175 rad/步按 DS041MG **空载**转速 8.73 rad/s 计算。带载时舵机更慢，所以这个限幅并不保守；舵机实际跟不上的指令，在限速后仍会存在。
+
+**采用判据。** 只有同时满足以下两条才启用，并作为仿真与实机共同的设计：
+1. 在降噪、修正物理模型后重新训练的策略，回放中仍有明显比例的无效高频指令（目标单步变化超过舵机实际能力，且对应关节跟踪误差高、力矩饱和）；
+2. 启用限速后，支撑、落脚与扰动恢复没有明显变差。
+
+**评估方法。**
+1. 同一配置分别在限速关闭和开启下训练相同 iteration 数（消融）。
+2. 用 `scripts/eval_action_noise.py` 做确定性回放，比较：
+   - 目标单步变化分布、超过 0.175 rad 的比例；
+   - 力矩饱和率、速度超限率、腿跟踪误差；
+   - 机身高度 RMSE、倾角；
+   - 台阶和箱体地形的通过率与 unsafe termination；
+   - 外力推扰后的恢复率和恢复时间。
+3. 如有实机回放，同时比较舵机电流和温升。
 
 ## 6. 相关文档
 

@@ -25,13 +25,26 @@ env:
   # The ranges, stance, body heights and obstacle caps come from
   # mdp/action/e0_v2_servo_contract.json (scripts/build_servo_contract.py).
   action_contract: servo_range_v2
+  # Optional leg target slew limit per 20 ms control step (DS041MG one-step travel is
+  # 8.73 rad/s x 0.02 s = 0.175 rad); the previous-action observation then carries the
+  # limited command and a deployment must apply the same limit.  Off: adopt it only if
+  # rollouts still show ineffective high-frequency commands and support, foothold and
+  # disturbance recovery do not suffer.
+  leg_target_max_step_rad: null
+  # Actor joint channels the robot can compute: hip servo-model estimate (8.73 rad/s
+  # rate-limited tracking of the command, finite-difference velocity) and commanded
+  # wheel velocity; true hip state goes to the critic. docs/REAL_ROBOT_IO_SPEC.md.
+  policy_joint_observation: servo_model
+  servo_model_delay_steps: 0
   # T1: set per stage by scripts/e0_training_orchestrator.py; null = levels 0..1.
   terrain_init_level: null
-  # G5 throughput switches. Values here are the E0-v1 behaviour; change one only
-  # after its G5 timing and physics check passed (output/fix_plan/G5/timing_matrix.json).
+  # G5 throughput switches. Values here are the E0-v1 behaviour except T3; change one
+  # only after its G5 timing and physics check passed (output/fix_plan/G5/timing_matrix.json).
+  # T3 must equal env/robots/stackforce.py SOLVER_POSITION_ITERATIONS (tested): 32 holds
+  # the five-bar closures at velocity level (docs/OUTER_HIP_STATIC_FORCE_DIAGNOSIS.md).
   throughput:
     enabled_self_collisions: true      # T2
-    solver_position_iteration_count: 8 # T3
+    solver_position_iteration_count: 32 # T3
     foot_track_pose: true              # T4
     foot_contact_update_period: null   # T6 (null = physics dt 0.005 s)
     replicate_physics: false           # T7
@@ -73,12 +86,13 @@ agent:
     distribution_cfg:
       class_name: base_locomotion_stackforce_quadrupedal.training.distribution:SquashedGaussianDistribution
       # Per dimension: 8 legs (outer FR FL RL RR, inner FR FL RL RR), then 4 wheels.
-      # Leg values = 0.15 rad / smaller half-range of each joint, so the initial
-      # physical joint noise equals E0-v1 (0.3 x 0.5 rad); wheels keep 0.3.
+      # Leg values = 0.10 rad / larger half-range of each joint, so the initial
+      # physical joint noise is <= 0.10 rad on both sides of the stance (one-step
+      # servo travel is 0.175 rad); wheels keep 0.3. min_std 0.02 admits these.
       # Regenerate with servo_range.leg_init_std() whenever the contract changes.
-      init_std: [0.1003, 0.1167, 0.0992, 0.1466, 0.1473, 0.1481, 0.1473, 0.1441, 0.3, 0.3, 0.3, 0.3]
+      init_std: [0.043, 0.033, 0.0424, 0.0351, 0.0661, 0.0391, 0.0661, 0.0429, 0.3, 0.3, 0.3, 0.3]
       std_type: log
-      min_std: 0.05
+      min_std: 0.02
       max_std: 0.5
   critic:
     hidden_dims: [128, 128]

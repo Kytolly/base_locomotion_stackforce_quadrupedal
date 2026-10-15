@@ -53,6 +53,18 @@ def test_e0_yaml_is_v2_with_explicit_contract_and_switches():
     }
 
 
+def test_solver_iterations_hold_the_closures_and_match_the_env_default():
+    # 8 iterations leave the closures converged only at position level (docs/OUTER_HIP_STATIC_FORCE_DIAGNOSIS.md).
+    cfg = _env_cfg()
+    from base_locomotion_stackforce_quadrupedal.tasks.manager_based.base_locomotion_stackforce_quadrupedal.env.robots.stackforce import (
+        SOLVER_POSITION_ITERATIONS,
+    )
+
+    assert SOLVER_POSITION_ITERATIONS == 32
+    assert load_config(E0).env.throughput.solver_position_iteration_count == SOLVER_POSITION_ITERATIONS
+    assert cfg.scene.robot.spawn.articulation_props.solver_position_iteration_count == SOLVER_POSITION_ITERATIONS
+
+
 def test_pre_v2_experiment_lines_keep_legacy_legs():
     for name in ("base_locomotion_complex.yaml", "base_locomotion_hybrid.yaml"):
         config = load_config(ROOT / "configs/train" / name)
@@ -74,14 +86,16 @@ def test_validator_rejects_incomplete_v2_configs():
 
 
 def test_per_dimension_std_initialises_legs_and_wheels_separately():
-    init_std = list(load_config(E0).agent.actor.distribution_cfg.init_std)
-    dist = SquashedGaussianDistribution(12, init_std=init_std)
+    distribution = load_config(E0).agent.actor.distribution_cfg
+    init_std = list(distribution.init_std)
+    bounds = {"min_std": distribution.min_std, "max_std": distribution.max_std}
+    dist = SquashedGaussianDistribution(12, init_std=init_std, **bounds)
     dist.update(torch.zeros(4, 12))
     assert torch.allclose(dist.std[0], torch.tensor(init_std), atol=1e-6)
     with pytest.raises(ValueError):
-        SquashedGaussianDistribution(12, init_std=init_std[:8])
+        SquashedGaussianDistribution(12, init_std=init_std[:8], **bounds)
     with pytest.raises(ValueError):
-        SquashedGaussianDistribution(12, init_std=[0.01] * 12)
+        SquashedGaussianDistribution(12, init_std=[0.01] * 12, **bounds)
 
 
 def test_obstacle_heights_follow_the_contract_and_legacy_is_unchanged():

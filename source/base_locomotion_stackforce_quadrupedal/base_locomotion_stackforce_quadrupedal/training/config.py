@@ -117,6 +117,17 @@ def validate_training_config(config: DictConfig) -> None:
             0.0 < float(bounds[0]) < float(bounds[1])
         ):
             raise ValueError(f"Invalid env.obstacle_heights.{name}: {bounds!r}")
+    max_step = config.env.get("leg_target_max_step_rad")
+    if max_step is not None and not float(max_step) > 0:
+        raise ValueError("env.leg_target_max_step_rad must be positive or null.")
+    joint_observation = config.env.get("policy_joint_observation")
+    if joint_observation is not None and str(joint_observation) not in {"measured", "servo_model"}:
+        raise ValueError(f"Unknown env.policy_joint_observation {joint_observation!r}.")
+    if joint_observation == "servo_model" and action_contract != "servo_range_v2":
+        raise ValueError("env.policy_joint_observation=servo_model requires env.action_contract=servo_range_v2.")
+    delay = config.env.get("servo_model_delay_steps")
+    if delay is not None and int(delay) < 0:
+        raise ValueError("env.servo_model_delay_steps must be non-negative.")
     throughput = config.env.get("throughput", {}) or {}
     unknown_throughput = sorted(set(throughput) - THROUGHPUT_KEYS)
     if unknown_throughput:

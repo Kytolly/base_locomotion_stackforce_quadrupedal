@@ -28,6 +28,7 @@
 | 指标 | 健康标准 | 红色警报 |
 | --- | --- | --- |
 | `train/runtime/all_finite` | 始终为 `1` | 出现 `0` |
+| `train/runtime/closure_residual_max_mm` | E0-v2 位置迭代 32 次时约 `0.2–0.3 mm` | 超过 `1 mm`（composition 门控）；8 次迭代时为 `6–16 mm` |
 | `train/runtime/finite_rate` | `100%` | 低于 `100%` |
 | reward、value loss、surrogate loss | 有限且无持续突增 | NaN/Inf 或发散 |
 | PPO KL | 有界并围绕目标值变化 | 持续爆炸或频繁裁剪 |
@@ -58,7 +59,7 @@ train/runtime/finite_rate = 1.0
 | `Mean reward` | 早期上升，后期稳定平台 | reward 上升但运动指标不改善 |
 | `Mean episode length` | 逐步接近上限 | reward 上升但 episode length 不变 |
 | `train/safety/timeout` | 逐步上升 | 长期低于 `80%` |
-| `train/safety/unsafe_termination` | 逐步下降 | 长期高于 `10%`，后期高于 `5%` |
+| `train/safety/unsafe_termination` | 逐步下降 | 长期高于 `10%`，后期高于 `5%`。注意：它是**已结束回合中**非超时结束的比例。训练早期几乎没有回合能活满 30 s，所以这个值天然接近 1，要结合 `Mean episode length` 一起看 |
 | `train/locomotion/forward_velocity_rmse_mps` | 持续下降 | 不低于零动作/静止策略基线 |
 | `train/locomotion/yaw_rate_rmse_radps` | 持续下降 | 长期高于 `0.20 rad/s` |
 | `train/reward/weighted/track_forward_velocity` | 随训练上升 | 总 reward 上升但该项不升 |
@@ -86,7 +87,7 @@ train/runtime/finite_rate = 1.0
 | `train/actuation/action_saturation_rate` | `< 10%` 健康；`10--20%` 观察；`> 20%` 不健康 | 最终标准为 `<= 5%` |
 | `train/actuation/action_rate_rms` | 平滑且不过度抖动 | 突然升高表示控制不稳定 |
 | `train/actuation/joint_position_limit_rate` | 接近 `0` | 持续超过 `1%` 需调查 |
-| `train/actuation/joint_velocity_limit_rate` | 接近 `0` | 持续超过 `5%` 需调查 |
+| `train/actuation/joint_velocity_limit_rate` | 随训练下降，最终接近 `0` | 最终持续超过 `5%` 需调查。E0-v2 开训时约 `0.5–0.7`，见下文 |
 | mechanical power | 与有效位移同步增加 | 功率升高但位移不增表示浪费或打滑 |
 
 经验判断：
@@ -97,6 +98,24 @@ action_saturation_rate < 10%          健康
 action_saturation_rate > 20%           不健康
 action_saturation_rate > 50%           基本可判定执行器控制异常
 ```
+
+### E0-v2 舵机执行指标（2026-10-15）
+
+`leg_saturation_rate` 只统计腿目标顶到行程端点的比例。在 E0-v2 的宽行程下，它一直接近 0，反映不出“舵机跟不上目标”的问题。下面四项才是执行质量的主要信号，目前作为观察项，不作为阶段门控：
+
+| 指标 | E0-v2 开训时的实测（40 iteration，4096 env） | 健康趋势 | 需要调查 |
+| --- | --- | --- | --- |
+| `train/actuation/leg_torque_saturation_rate` | 约 `0.69` | 随训练下降 | Expansion 结束仍高于 `0.4` |
+| `train/actuation/joint_velocity_limit_rate` | 约 `0.58` | 随训练下降 | Expansion 结束仍高于 `0.2` |
+| `train/actuation/leg_tracking_error_rad` | 约 `0.60 rad` | 随训练下降 | Expansion 结束仍高于 `0.3 rad` |
+| `train/actuation/action_rate_rms` | 约 `0.46` | 下降后平稳 | 不降，或与上面三项一起反弹 |
+
+上表的“需要调查”阈值是暂定值，等本次长训的数据出来后再校准。读这些指标时要注意：
+
+- **训练日志测的是带探索噪声的动作。** 确定性回放显示，噪声大约让“目标单步变化超出舵机一步能力（0.175 rad）”的步数翻倍（约 25% → 60%）。判断策略本身是否在发出舵机跟不上的指令，要用确定性回放：`scripts/eval_action_noise.py --checkpoint <model.pt>`。
+- **长期不降说明策略一直在发出舵机跟不上的指令。** 这正是腿目标限速开放决策的依据，见 [修复计划 §5.1](ACTION_RANGE_THROUGHPUT_FIX_PLAN.md)。启用限速前，必须同时比较支撑、落脚和扰动恢复。
+- **探索噪声的基线已变。** 腿部初始物理噪声在站姿两侧都不超过 0.10 rad，`min_std` 为 0.02。`Policy/mean_std` 的起点约 0.13（含轮的 0.3），旧配置约 0.19。
+- **所有执行指标都由仿真真值计算。** E0-v2 的 actor 观测的是舵机模型估计（[实机观测与执行规格](REAL_ROBOT_IO_SPEC.md)），指标不读取这个估计。目前没有记录“估计值与真实关节角的误差”，建议后续补充，用来量化实机偏差。
 
 ## 支撑、接触与稳定性
 
@@ -176,6 +195,15 @@ runtime_all_finite = 1
 | runtime finite rate | `100%` |
 
 上述数值还必须在五组 command、八类 terrain family 和重复的 nominal/randomized Plateau/Washboard benchmark 中满足项目验收规则。详情见 [`ACCEPTANCE_CRITERIA.md`](ACCEPTANCE_CRITERIA.md) 和 [`BENCHMARKS.md`](BENCHMARKS.md)。
+
+## 阶段门控阈值的校准情况（E0-v2）
+
+阶段门控与中止条件定义在 `configs/experiments/e0_v2_stage_gates.yaml`，由 `scripts/e0_run_health.py` 判定。编排器在启动时读取一次，修改只对下次启动生效。下面两项阈值没有经过实测校准：
+
+- **Foundation `flat_timeout_rate >= 0.90`。** P1 短训（1000 iteration，旧噪声，8 次迭代）结束时，平地 timeout 存活率只有 `0–0.33`。不满足时 Foundation 会暂停（退出码 3），需要审阅后用 `--resume-after foundation` 继续。
+- **中止条件：最近 500 iteration 的 `unsafe_termination` 全部 > 0.30 且仍在上升。** 由于上面说的统计口径，早期这一项天然偏高。P1 在 0–1000 iteration 内一直处于 `0.49–1.0`，有可能误触发中止（退出码 4）。
+
+建议本次长训结束后，用它的实测数据重新校准这两项。中止条件可以改看 timeout 存活率，或者把窗口延长。
 
 ## 推荐的 W&B 精简面板
 

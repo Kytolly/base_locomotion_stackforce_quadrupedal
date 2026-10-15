@@ -34,10 +34,13 @@ from ..mdp.action import (
 )
 from ..mdp.action import servo_range
 from ..mdp.observation import history, privileged, proprioception
+from ..mdp.observation.privileged import terms as privileged_terms
+from ..mdp.observation.proprioception import terms as proprioception_terms
 from ..mdp.policy import LocomotionCommandCfg
 from ..mdp.policy import commands as command_mdp
 from ..mdp.reward import locomotion as reward_mdp
-from .robots import ACTIVE_JOINTS, create_robot_articulation_cfg
+from .robots import ACTIVE_JOINTS, LEG_JOINTS, create_robot_articulation_cfg
+from .robots.stackforce import SOLVER_POSITION_ITERATIONS
 from .terrains import LEGACY_OBSTACLE_HEIGHTS, TRAINING_TERRAIN_FAMILIES, get_complex_terrain_cfg
 from ..evaluation.metric.recorder import LocomotionRecordersCfg
 from ..mdp.policy.input import ACTOR_INPUT_DIM
@@ -147,6 +150,9 @@ class ObservationsCfg:
                 "asset_cfg": SceneEntityCfg("robot", joint_names=list(ACTIVE_JOINTS))
             },
         )
+        # True hip state; set only when the actor sees the servo model (policy_joint_observation).
+        true_leg_joint_pos: ObsTerm | None = None
+        true_leg_joint_vel: ObsTerm | None = None
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -385,7 +391,15 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
     obstacle_height_override: dict | None = None
     # G5 throughput switches; defaults are the E0-v1 behaviour.
     enabled_self_collisions: bool = True  # T2
-    solver_position_iteration_count: int = 8  # T3
+    solver_position_iteration_count: int = SOLVER_POSITION_ITERATIONS  # T3
+    # Leg target slew limit (rad per control step, servo_range_v2 only); None = off.
+    # DS041MG: 8.73 rad/s x 0.02 s = 0.175 rad.  See mdp/action/asymmetric.py.
+    leg_target_max_step_rad: float | None = None
+    # Actor joint channels: "measured" = simulated joint state (E0-v1/v2 so far);
+    # "servo_model" = what the robot can compute (hip servo-model estimate, commanded
+    # wheel velocity), with true hip state moved to the critic.  servo_range_v2 only.
+    policy_joint_observation: str = "measured"
+    servo_model_delay_steps: int = 0
     foot_track_pose: bool = True  # T4
     foot_contact_update_period: float | None = None  # T6 (None = physics dt)
 
@@ -409,6 +423,31 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
         )
         self.scene.terrain.terrain_generator.curriculum = self.curriculum.terrain_levels is not None
 
+    def _apply_policy_joint_observation(self) -> None:
+        """Point the actor's joint channels at simulated state or at the deployable servo model."""
+        mode = str(self.policy_joint_observation)
+        if mode not in ("measured", "servo_model"):
+            raise ValueError(f"Unknown policy_joint_observation {mode!r}; expected 'measured' or 'servo_model'.")
+        if mode == "servo_model" and self.action_contract != SERVO_ACTION_CONTRACT:
+            raise ValueError("policy_joint_observation='servo_model' needs the servo_range_v2 leg action term.")
+        if int(self.servo_model_delay_steps) < 0:
+            raise ValueError("servo_model_delay_steps must be non-negative.")
+        policy, critic = self.observations.policy, self.observations.privileged
+        if policy is None or getattr(policy, "joint_pos", None) is None:
+            return  # probes may strip the actor group
+        if mode == "servo_model":
+            policy.joint_pos.func, policy.joint_pos.params = proprioception_terms.servo_model_joint_position, {}
+            policy.joint_vel.func, policy.joint_vel.params = proprioception_terms.servo_model_joint_velocity, {}
+            legs = SceneEntityCfg("robot", joint_names=list(LEG_JOINTS), preserve_order=True)
+            critic.true_leg_joint_pos = ObsTerm(func=privileged_terms.true_joint_position, params={"asset_cfg": legs})
+            critic.true_leg_joint_vel = ObsTerm(func=privileged_terms.true_joint_velocity, params={"asset_cfg": legs})
+        else:
+            active = {"asset_cfg": SceneEntityCfg("robot", joint_names=list(ACTIVE_JOINTS))}
+            policy.joint_pos.func, policy.joint_pos.params = proprioception.active_joint_position, dict(active)
+            policy.joint_vel.func, policy.joint_vel.params = proprioception.active_joint_velocity, dict(active)
+            critic.true_leg_joint_pos = None
+            critic.true_leg_joint_vel = None
+
     def apply_action_contract(self, rebuild_terrain: bool = True) -> None:
         """Write every field that depends on ``action_contract``; safe to call repeatedly.
 
@@ -426,6 +465,10 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
             joint_pos.update({name: float(value) for name, value in contract["passive_knees"].items()})
             joint_pos[".*_Wheel_Joint"] = 0.0
             self.actions.leg_position = servo_leg_position_cfg(contract)
+            self.actions.leg_position.max_target_step_rad = (
+                None if self.leg_target_max_step_rad is None else float(self.leg_target_max_step_rad)
+            )
+            self.actions.leg_position.servo_model_delay_steps = int(self.servo_model_delay_steps)
             self.events.servo_joint_limits = EventTerm(
                 func=events.write_servo_joint_limits,
                 mode="startup",
@@ -457,6 +500,7 @@ class BaseLocomotionComplexEnvCfg(ManagerBasedRLEnvCfg):
                 f"Unknown action_contract {self.action_contract!r}; expected "
                 f"{LEGACY_ACTION_CONTRACT!r} or {SERVO_ACTION_CONTRACT!r}."
             )
+        self._apply_policy_joint_observation()
         robot = self.scene.robot
         robot.init_state.joint_pos = joint_pos
         robot.init_state.pos = (0.0, 0.0, root_height)
@@ -498,6 +542,9 @@ ENV_OPTION_FIELDS = {
     "action_contract": "action_contract",
     "terrain_init_level": "terrain_init_level",
     "obstacle_heights": "obstacle_height_override",
+    "leg_target_max_step_rad": "leg_target_max_step_rad",
+    "policy_joint_observation": "policy_joint_observation",
+    "servo_model_delay_steps": "servo_model_delay_steps",
 }
 THROUGHPUT_OPTION_FIELDS = {
     "enabled_self_collisions": "enabled_self_collisions",
@@ -546,7 +593,12 @@ def checkpoint_env_options(checkpoint: str | Path | None) -> dict[str, Any]:
     if config_path.is_file():
         from omegaconf import OmegaConf
 
-        throughput = OmegaConf.select(OmegaConf.load(config_path), "env.throughput", default=None)
+        resolved = OmegaConf.load(config_path)
+        throughput = OmegaConf.select(resolved, "env.throughput", default=None)
         if throughput is not None:
             options["throughput"] = OmegaConf.to_container(throughput, resolve=True)
+        # How actions reach the servos and what the actor observed are part of the policy.
+        options["leg_target_max_step_rad"] = OmegaConf.select(resolved, "env.leg_target_max_step_rad", default=None)
+        for key, default in (("policy_joint_observation", "measured"), ("servo_model_delay_steps", 0)):
+            options[key] = OmegaConf.select(resolved, f"env.{key}", default=default)
     return options

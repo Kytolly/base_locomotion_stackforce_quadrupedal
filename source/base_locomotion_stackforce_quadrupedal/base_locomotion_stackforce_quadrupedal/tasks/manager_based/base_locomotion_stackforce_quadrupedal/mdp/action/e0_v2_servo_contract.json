@@ -40252,7 +40252,7 @@
     "source": "G3 measured standing height"
   },
   "exploration": {
-    "physical_noise_rad": 0.15,
+    "physical_noise_rad": 0.1,
     "wheel_init_std": 0.3
   },
   "obstacles": {
